@@ -1,4 +1,4 @@
-# [SAFET]
+# Celestrade Engine
 
 Sistem analisis dan eksekusi otomatis untuk pasar Cryptocurrency (Spot & Futures).
 
