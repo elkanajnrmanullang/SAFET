@@ -1,0 +1,1 @@
+# Logika tarik data CCXT
