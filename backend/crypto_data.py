@@ -1,89 +1,137 @@
 import ccxt
+import yfinance as yf
 import pandas as pd
 import pandas_ta as ta
 
-def get_binance_data(symbol, timeframe, limit=500):
-    """
-    Menarik data dari Binance.
-    """
+# --- DATA FETCHING ENGINE ---
+def fetch_data_and_news(symbol, timeframe, limit=200):
+    symbol_yf = symbol.replace("/", "-").replace("USDT", "USD")
+    tf_map = {'15m': '15m', '1h': '1h', '4h': '1h', '1d': '1d'}
+    
     try:
-        exchange = ccxt.binance()
-        bars = exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
-        if not bars: return None
-        df = pd.DataFrame(bars, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-        return df
-    except:
-        return None
+        exc = ccxt.binance({'enableRateLimit':True, 'timeout':5000})
+        exc.ssl = False; exc.verify = False
+        bars = exc.fetch_ohlcv(symbol, timeframe, limit=limit)
+        if bars:
+            df = pd.DataFrame(bars, columns=['timestamp','open','high','low','close','volume'])
+            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+            return df, "Binance Data", ""
+    except: pass
 
-def calculate_indicators(df):
-    """
-    Menghitung indikator teknikal.
-    """
+    try:
+        tick = yf.Ticker(symbol_yf)
+        period = '1y' if timeframe == '1d' else '2mo'
+        df = tick.history(period=period, interval=tf_map.get(timeframe, '1h'))
+        
+        news_text = ""
+        if tick.news:
+            for n in tick.news[:2]:
+                news_text += f"- {n.get('title')}\n"
+        
+        if not df.empty:
+            df = df.reset_index()
+            df = df.rename(columns={'Date':'timestamp','Datetime':'timestamp','Open':'open','High':'high','Low':'low','Close':'close','Volume':'volume'})
+            df['timestamp'] = df['timestamp'].dt.tz_localize(None)
+            return df.tail(limit), "Yahoo Data", news_text
+    except: pass
+
+    return None, None, None
+
+# --- MARKET DASHBOARD (UI AWAL) ---
+def get_market_overview():
+    # Mengambil data BTC & ETH singkat untuk tampilan awal
+    try:
+        exc = ccxt.binance()
+        exc.ssl = False; exc.verify = False
+        btc = exc.fetch_ticker('BTC/USDT')
+        eth = exc.fetch_ticker('ETH/USDT')
+        return {
+            'btc_price': btc['last'],
+            'btc_change': btc['percentage'],
+            'eth_price': eth['last'],
+            'eth_change': eth['percentage']
+        }
+    except:
+        return {'btc_price': 0, 'btc_change': 0, 'eth_price': 0, 'eth_change': 0}
+
+# --- INDICATORS ---
+def calc_indicators(df):
     if df is None or df.empty: return None
     try:
         df['RSI'] = df.ta.rsi(length=14)
         df['EMA_50'] = df.ta.ema(length=50)
         df['EMA_200'] = df.ta.ema(length=200)
-        macd = df.ta.macd(fast=12, slow=26, signal=9)
-        if macd is not None: df = pd.concat([df, macd], axis=1)
-        df.dropna(inplace=True)
+        df['Sup'] = df['low'].rolling(50).min()
+        df['Res'] = df['high'].rolling(50).max()
         return df
-    except:
-        return df
+    except: return df
 
-def get_mtf_analysis(symbol, main_tf):
-    """
-    FITUR BARU: Mengambil data Multi-Timeframe (MTF).
-    Misal user pilih 1h (Entry), sistem otomatis ambil 4h (Trend).
-    """
-    # 1. Tentukan Timeframe Pendamping (Higher High)
-    tf_map = {
-        '15m': '1h',
-        '1h':  '4h',
-        '4h':  '1d',
-        '1d':  '1w'
-    }
-    higher_tf = tf_map.get(main_tf, '1d') # Default ke 1d jika tidak ketemu
+# --- SCANNER TOTAL ---
+def scan_dynamic_market():
+    try:
+        exc = ccxt.binance()
+        tickers = exc.fetch_tickers()
+    except: return []
 
-    # 2. Tarik Data Utama (Entry)
-    df_main = get_binance_data(symbol, main_tf)
-    df_main = calculate_indicators(df_main)
+    valid_symbols = []
+    for symbol, data in tickers.items():
+        if symbol.endswith('/USDT') and data['quoteVolume'] is not None:
+            if data['quoteVolume'] > 30000000:
+                valid_symbols.append(symbol)
+
+    top_50_symbols = sorted(valid_symbols, key=lambda x: tickers[x]['quoteVolume'], reverse=True)[:50]
+    candidates = []
     
-    # 3. Tarik Data Trend (Higher TF)
-    df_trend = get_binance_data(symbol, higher_tf)
-    df_trend = calculate_indicators(df_trend)
+    for sym in top_50_symbols:
+        df, _, _ = fetch_data_and_news(sym, '1h', limit=100)
+        df = calc_indicators(df)
+        
+        if df is None or 'RSI' not in df.columns: continue
+        
+        last = df.iloc[-1]
+        price = last['close']
+        ema200 = last.get('EMA_200', 0)
+        rsi = last.get('RSI', 50)
+        bias = "NEUTRAL"; rr = 0
+        
+        if ema200 > 0 and price > ema200 and rsi < 45:
+            sup = last.get('Sup', price * 0.95)
+            res = last.get('Res', price * 1.05)
+            risk = price - sup; reward = res - price
+            if risk > 0: rr = reward / risk
+            if rr >= 1.5: bias = "LONG"
+            
+        elif ema200 > 0 and price < ema200 and rsi > 55:
+            sup = last.get('Sup', price * 0.95)
+            res = last.get('Res', price * 1.05)
+            risk = res - price; reward = price - sup
+            if risk > 0: rr = reward / risk
+            if rr >= 1.5: bias = "SHORT"
 
-    if df_main is None or df_trend is None:
-        return None, "Gagal menarik data."
+        if bias != "NEUTRAL":
+            candidates.append({'symbol': sym, 'bias': bias, 'rr': round(rr, 2), 'price': price})
+            
+    candidates = sorted(candidates, key=lambda x: x['rr'], reverse=True)
+    return candidates[:3]
 
-    # 4. Ambil baris terakhir
-    main = df_main.iloc[-1]
-    trend = df_trend.iloc[-1]
-
-    # Helper untuk ambil nama kolom MACD yg dinamis
-    def get_macd(row, df_cols):
-        col = [c for c in df_cols if 'MACD_' in c and 'h' not in c and 's' not in c][0]
-        sig = [c for c in df_cols if 'MACDs_' in c][0]
-        return row[col], row[sig]
-
-    main_macd, main_sig = get_macd(main, df_main.columns)
-    trend_macd, trend_sig = get_macd(trend, df_trend.columns)
-
-    # 5. Susun Laporan Data Lengkap
-    data_summary = f"""
-    ANALISA MULTI-TIMEFRAME UNTUK {symbol}:
+# --- AI DATA PREP ---
+def get_ai_context_indo(symbol):
+    df_chart, src, news = fetch_data_and_news(symbol, '1h', limit=200)
+    df_trend, _, _ = fetch_data_and_news(symbol, '1d', limit=200)
     
-    1. TIMEFRAME UTAMA ({main_tf}) - FOKUS MOMENTUM/ENTRY:
-    - Harga: {main['close']}
-    - RSI: {main['RSI']:.2f}
-    - EMA 50 vs 200: {main['EMA_50']:.2f} vs {main['EMA_200']:.2f}
-    - MACD: {main_macd:.2f} (Signal: {main_sig:.2f})
-
-    2. TIMEFRAME TREN BESAR ({higher_tf}) - FOKUS ARAH PASAR:
-    - RSI: {trend['RSI']:.2f}
-    - EMA 50 vs 200: {trend['EMA_50']:.2f} vs {trend['EMA_200']:.2f} (Posisi harga terhadap EMA menentukan tren besar)
-    - MACD: {trend_macd:.2f}
+    if df_chart is None: return None, "Data Error"
+    
+    df_chart = calc_indicators(df_chart)
+    df_trend = calc_indicators(df_trend)
+    
+    l_1h = df_chart.iloc[-1]
+    l_1d = df_trend.iloc[-1]
+    candles = df_chart.tail(5)[['open','high','low','close']].values.tolist()
+    
+    context = f"""
+    BERITA TERBARU: {news if news else "Gunakan sentimen makro."}
+    MARKET (H1): Price:{l_1h['close']}, RSI:{l_1h['RSI']:.2f}, EMA200:{l_1h['EMA_200']:.2f}
+    TREND (D1): {'BULLISH' if l_1d['close'] > l_1d['EMA_200'] else 'BEARISH'}
+    CANDLES (5): {candles}
     """
-    
-    return df_main, data_summary
+    return df_chart, context
