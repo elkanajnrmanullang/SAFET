@@ -1,4 +1,4 @@
-# Celestrade Engine
+# Altavara Group Decision System
 
 Sistem analisis dan eksekusi otomatis untuk pasar Cryptocurrency (Spot & Futures).
 
