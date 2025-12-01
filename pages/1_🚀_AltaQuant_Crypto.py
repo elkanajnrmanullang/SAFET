@@ -71,7 +71,8 @@ def render_card(symbol, data, bias):
         <div class="analysis-text">
             <strong>🌍 Fundamental:</strong><br>{data.get('fundamental')}<br><br>
             <strong>📊 Teknikal & Volume:</strong><br>{data.get('teknikal')}<br>
-            <em>Chart: {data.get('chart_pattern')} | Candle: {data.get('candle_pattern')}</em>
+            <em>Chart: {data.get('chart_pattern')}</em>
+            <em>Candle: {data.get('candle_pattern')}</em>
         </div>
         <div class="verdict" style="border-color:{theme};"><strong>🤖 Kesimpulan:</strong> "{data.get('alasan')}"</div>
     </div>

@@ -24,7 +24,7 @@ def get_market_overview():
         return {'btc_price': 0, 'btc_change': 0, 'eth_price': 0, 'eth_change': 0}
 
 # --- CALCULATE VOLUME PROFILE (FRVP - Point of Control) ---
-def calc_volume_profile(df, bins=50):
+def calc_volume_profile(df, bins=100): # Bins ditingkatkan ke 100 untuk presisi
     try:
         price_min = df['low'].min()
         price_max = df['high'].max()
@@ -44,8 +44,9 @@ def calc_volume_profile(df, bins=50):
     except:
         return df['close'].iloc[-1]
 
-# --- FETCH DATA ---
-def fetch_market_data(symbol, timeframe='1h', limit=300):
+# --- FETCH DATA (PRECISION UPGRADE) ---
+def fetch_market_data(symbol, timeframe='1h', limit=1000): 
+    # Limit default dinaikkan ke 1000 agar EMA 200 & RSI akurat (TradingView standard)
     try:
         exc = get_exchange()
         exc.ssl = False; exc.verify = False
@@ -67,6 +68,8 @@ def calc_technical_indicators(df):
         df['RSI'] = df.ta.rsi(length=14)
         # Volume Moving Average
         df['Vol_SMA'] = df['volume'].rolling(20).mean()
+        # Volatility
+        df['ATR'] = df.ta.atr(length=14)
         
         # Candle Patterns Logic
         o = df['open']; c = df['close']; h = df['high']; l = df['low']
@@ -80,9 +83,9 @@ def calc_technical_indicators(df):
         df['Is_Bull_Engulf'] = (c > o) & (prev_c < prev_o) & (c > prev_o) & (o < prev_c)
         df['Is_Bear_Engulf'] = (c < o) & (prev_c > prev_o) & (c < prev_o) & (o > prev_c)
 
-        # Structure
-        df['Sup'] = df['low'].rolling(20).min()
-        df['Res'] = df['high'].rolling(20).max()
+        # Structure (Support/Resistance 50 Candle)
+        df['Sup'] = df['low'].rolling(50).min()
+        df['Res'] = df['high'].rolling(50).max()
         
         return df
     except: return df
@@ -101,7 +104,8 @@ def scan_dynamic_market():
     final_picks = []
     
     for sym in candidates_pool:
-        df = fetch_market_data(sym, '1h', limit=150)
+        # Gunakan limit 500 saat scanning agar cepat namun tetap akurat
+        df = fetch_market_data(sym, '1h', limit=500)
         df = calc_technical_indicators(df)
         
         if df is None or 'RSI' not in df.columns: continue
@@ -114,7 +118,7 @@ def scan_dynamic_market():
         vol_sma = last.get('Vol_SMA', 0)
         rsi = last.get('RSI', 50)
         
-        # Skip Market Sepi
+        # Skip Market Sepi (Volume < 80% Rata-rata)
         if last['volume'] < (vol_sma * 0.8): continue
             
         bias = "NEUTRAL"; score = 0
@@ -138,17 +142,18 @@ def scan_dynamic_market():
     final_picks = sorted(final_picks, key=lambda x: x['score'], reverse=True)
     return final_picks[:3]
 
-# --- AI CONTEXT ---
+# --- AI CONTEXT GENERATOR (LEARNING ENABLED) ---
 def get_ai_context_indo(symbol, poc_val=0):
-    df_chart = fetch_market_data(symbol, '1h', limit=200)
-    df_trend = fetch_market_data(symbol, '1d', limit=200)
+    # Tarik 1000 candle untuk analisa mendalam (Indikator Stabil)
+    df_chart = fetch_market_data(symbol, '1h', limit=1000)
+    df_trend = fetch_market_data(symbol, '1d', limit=1000)
     
     if df_chart is None: return None, "Error", 0
     
     df_chart = calc_technical_indicators(df_chart)
     df_trend = calc_technical_indicators(df_trend)
     
-    if poc_val == 0: poc_val = calc_volume_profile(df_chart)
+    if poc_val == 0: poc_val = calc_volume_profile(df_chart, bins=100)
         
     l_1h = df_chart.iloc[-1]
     l_1d = df_trend.iloc[-1]
@@ -163,18 +168,21 @@ def get_ai_context_indo(symbol, poc_val=0):
     adaptive_rules = get_adaptive_rules()
     
     context = f"""
-    [LEARNING RULES (JANGAN ULANGI KESALAHAN INI)]:
-    {adaptive_rules if adaptive_rules else "Analisa standar."}
+    [ATURAN DARI PENGALAMAN (ADAPTIVE LEARNING)]:
+    Sistem telah belajar dari kesalahan user sebelumnya. PATUHI INI:
+    {adaptive_rules if adaptive_rules else "Belum ada data pembelajaran. Analisa normal."}
     
-    [DATA TEKNIKAL {symbol}]:
+    [DATA TEKNIKAL REAL-TIME {symbol}]:
     - Harga: {l_1h['close']}
     - POC (Volume Profile): {poc_val:.4f} (Harga di atas POC = Bullish, Bawah = Bearish)
     - RSI H1: {l_1h['RSI']:.2f}
     - Trend D1: {'BULLISH' if l_1d['close'] > l_1d['EMA_200'] else 'BEARISH'}
+    - ATR: {l_1h['ATR']:.4f}
     
-    [STRUKTUR]:
+    [STRUKTUR HARGA]:
     - Pola Candle H1: {candle_txt}
-    - Support: {l_1h['Sup']} | Resistance: {l_1h['Res']}
+    - Support Terdekat: {l_1h['Sup']}
+    - Resistance Terdekat: {l_1h['Res']}
     
     [5 CANDLE TERAKHIR (OHLC)]:
     {df_chart.tail(5)[['open','high','low','close']].values.tolist()}
