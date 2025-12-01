@@ -78,7 +78,6 @@ def calc_technical_indicators(df):
         df['Vol_SMA'] = df['volume'].rolling(20).mean()
         df['ATR'] = df.ta.atr(length=14)
         
-        # Pola Candle
         o, c, h, l = df['open'], df['close'], df['high'], df['low']
         body = abs(c - o)
         df['Is_Hammer'] = ((pd.concat([o, c], axis=1).min(axis=1) - l) > (body * 2)) & ((h - pd.concat([o, c], axis=1).max(axis=1)) < body)
@@ -90,21 +89,21 @@ def calc_technical_indicators(df):
         return df
     except: return df
 
-# --- SMART SCANNER V5 (90% PROBABILITY FILTER) ---
+# --- SMART SCANNER V5.1 (FAIL-SAFE LOGIC) ---
 def scan_dynamic_market():
     try:
         exc = get_exchange()
         tickers = exc.fetch_tickers()
     except: return []
 
-    # Ambil 75 Koin Volume Terbesar (Likuiditas Tinggi = Chart Lebih Valid)
+    # Ambil 75 Koin Volume Terbesar
     valid_symbols = [s for s, d in tickers.items() if s.endswith('/USDT')]
     candidates = sorted(valid_symbols, key=lambda x: tickers[x].get('quoteVolume', 0), reverse=True)[:75]
     
-    scored_candidates = []
+    high_quality_list = [] # Skor >= 4
+    backup_list = []       # Skor < 4 tapi volume hidup
     
     for sym in candidates:
-        # Gunakan limit 250 agar scanner cepat tapi data indikator tetap ada
         df = fetch_market_data(sym, '1h', limit=250)
         df = calc_technical_indicators(df)
         if df is None or 'RSI' not in df.columns: continue
@@ -112,46 +111,62 @@ def scan_dynamic_market():
         poc = calc_volume_profile(df)
         last = df.iloc[-1]
         
-        # --- ALGORITMA SCORING V5 ---
+        # --- SCORING ---
         score = 0
         bias = "NEUTRAL"
         
-        # 1. Trend Alignment (Follow The Trend)
-        if last['close'] > last.get('EMA_200', 0): score += 3 # Bobot besar
+        # 1. Trend
+        if last['close'] > last.get('EMA_200', 0): score += 3
         else: score -= 3
         
-        # 2. Volume Profile (Support/Resist Valid)
+        # 2. POC
         if last['close'] > poc: score += 2
         else: score -= 2
         
-        # 3. Momentum (RSI) - Penentu Entry
+        # 3. Momentum
         rsi = last.get('RSI', 50)
         if rsi < 30: 
-            score += 6 # Oversold Ekstrem (Potensi Bounce Tinggi)
+            score += 6
             bias = "LONG (Sniper Bounce)"
         elif rsi > 70: 
-            score -= 6 # Overbought Ekstrem (Potensi Dump Tinggi)
+            score -= 6
             bias = "SHORT (Sniper Pullback)"
             
-        # 4. Pola Candle (Konfirmasi Instan)
+        # 4. Pattern
         if last['Is_Bull_Engulf']: score += 2
         if last['Is_Bear_Engulf']: score -= 2
         
-        # Tentukan Bias jika bukan Reversal Ekstrem
         if "Sniper" not in bias:
             if score > 3: bias = "LONG (Strong Trend)"
             elif score < -3: bias = "SHORT (Strong Trend)"
             
-        # Filter: Hanya masukkan jika Volume hidup dan Skor Signifikan
-        if last['volume'] > (last.get('Vol_SMA', 0) * 0.4) and abs(score) >= 4:
-            scored_candidates.append({'symbol': sym, 'bias': bias, 'score': abs(score), 'poc': poc})
+        # DATA PACK
+        candidate_data = {'symbol': sym, 'bias': bias, 'score': abs(score), 'poc': poc}
+        
+        # LOGIKA FAIL-SAFE:
+        # Masukkan ke Backup List (Asal volume ada)
+        if last['volume'] > (last.get('Vol_SMA', 0) * 0.3):
+            backup_list.append(candidate_data)
             
-    # Kembalikan 3 Koin dengan Skor Teknikal Tertinggi (Paling Valid)
-    return sorted(scored_candidates, key=lambda x: x['score'], reverse=True)[:3]
+            # Jika Skor Bagus, masukkan juga ke High Quality
+            if abs(score) >= 4:
+                high_quality_list.append(candidate_data)
+            
+    # RETURN LOGIC:
+    # Prioritas 1: Koin High Quality (Skor >= 4)
+    if high_quality_list:
+        return sorted(high_quality_list, key=lambda x: x['score'], reverse=True)[:3]
+    
+    # Prioritas 2: JIKA KOSONG, Ambil "Best of the Rest" dari Backup List
+    # (Ini menjamin Auto-Discovery tidak pernah kosong)
+    elif backup_list:
+        return sorted(backup_list, key=lambda x: x['score'], reverse=True)[:3]
+        
+    else:
+        return []
 
-# --- AI CONTEXT GENERATOR (V5 - FULL DATA PACK) ---
+# --- AI CONTEXT GENERATOR ---
 def get_ai_context_indo(symbol, poc_val=0):
-    # 1. Data Chart
     df_chart = fetch_market_data(symbol, '1h', limit=1000)
     df_trend = fetch_market_data(symbol, '1d', limit=1000)
     
@@ -164,14 +179,12 @@ def get_ai_context_indo(symbol, poc_val=0):
     l_1h = df_chart.iloc[-1]
     l_1d = df_trend.iloc[-1]
     
-    # 2. Data Eksternal
     btc_trend = get_btc_trend()
     oi = fetch_open_interest(symbol)
     fund_data = get_fundamental_data(symbol)
     news_data = get_crypto_news(symbol)
     sent_score = analyze_sentiment_score(news_data)
     
-    # 3. Pola Candle
     patt = []
     if l_1h['Is_Hammer']: patt.append("Hammer")
     if l_1h['Is_Bull_Engulf']: patt.append("Bullish Engulfing")
@@ -180,7 +193,6 @@ def get_ai_context_indo(symbol, poc_val=0):
     
     adaptive_rules = get_adaptive_rules()
     
-    # 4. Context Builder
     context = f"""
     [ATURAN BELAJAR]: {adaptive_rules if adaptive_rules else "Analisa normal."}
     [MARKET UTAMA]: BTC Trend (H4): {btc_trend}
@@ -203,5 +215,4 @@ def get_ai_context_indo(symbol, poc_val=0):
     
     extra_data = {'btc_trend': btc_trend, 'sentiment': sent_score, 'news': news_data}
     
-    # RETURN 4 DATA (FIX CRASH)
     return df_chart, context, poc_val, extra_data
