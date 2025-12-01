@@ -14,4 +14,3 @@ with col2:
     st.info("**AltaFX (Forex)**\nFokus: Makro Ekonomi & Sentimen")
 
 st.success("Status Sistem: 🟢 Online")
-git commit -m "Menghapus .env dari tracking repository"
