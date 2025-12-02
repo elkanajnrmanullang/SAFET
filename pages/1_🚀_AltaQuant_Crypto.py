@@ -3,14 +3,13 @@ import plotly.graph_objects as go
 import json
 import re
 import time
-import traceback # Untuk debug error jika ada
 from backend.crypto_data import get_ai_context_indo, scan_dynamic_market, get_market_overview
 from backend.ai_engine import get_gemini_analysis
 from backend.database import save_trade, get_history, update_outcome, update_outcome_and_learn
 
-st.set_page_config(page_title="AltaQuant Pro V5", layout="wide")
+st.set_page_config(page_title="AltaQuant Pro V5.3", layout="wide")
 
-# --- CSS (CLEAN & PROFESSIONAL) ---
+# --- CSS ---
 st.markdown("""
 <style>
     :root {--primary:#6366f1; --bg:#0f172a; --card:#1e293b; --border:#334155; --success:#10b981; --danger:#ef4444; --gold:#f59e0b; --neutral:#94a3b8;}
@@ -47,13 +46,14 @@ def parse_json(text):
         clean = re.sub(r'```json\s*|\s*```', '', text).strip()
         return json.loads(clean)
     except:
-        return {"fundamental":"Gagal Parsing JSON","teknikal":"Gagal Parsing","keputusan":"WAIT","entry":"-","sl":"-","tp1":"-","tp2":"-","alasan":text[:500]}
+        return {"fundamental":"Gagal Parsing","teknikal":"Gagal Parsing","chart_pattern":"-","candle_pattern":"-","keputusan":"WAIT","entry":"-","sl":"-","tp1":"-","tp2":"-","alasan":text[:500]}
 
 def clean_text_output(data_input):
     if isinstance(data_input, dict):
         html_list = '<ul class="clean-list">'
         for k, v in data_input.items():
-            html_list += f"<li><strong>{k.replace('_', ' ').title()}:</strong> {v}</li>"
+            clean_key = k.replace("_", " ").title()
+            html_list += f"<li><strong>{clean_key}:</strong> {v}</li>"
         html_list += "</ul>"
         return html_list
     elif isinstance(data_input, list):
@@ -116,7 +116,7 @@ def render_card(symbol, data, bias, extra_data):
 </div>
 <div style="text-align:right;">
 <span style="color:{theme}; font-weight:bold; font-size:1.2em; letter-spacing:1px;">BIAS: {bias}</span><br>
-<small style="color:#94a3b8; font-size:0.75em;">INSTITUTIONAL V5</small>
+<small style="color:#94a3b8; font-size:0.75em;">SOP: TOP-DOWN CONTEXT</small>
 </div>
 </div>
 <div class="grid-info">
@@ -126,18 +126,18 @@ def render_card(symbol, data, bias, extra_data):
 </div>
 <div class="analysis-section">
 <div class="analysis-box">
-<div class="analysis-title">🌍 FUNDAMENTAL REALITY</div>
+<div class="analysis-title">🌍 FUNDAMENTAL & NEWS</div>
 <div class="analysis-content">{clean_fund}</div>
 </div>
 <div class="analysis-box">
-<div class="analysis-title">📊 TECHNICAL & VOLUME</div>
+<div class="analysis-title">📊 TECHNICAL SOP (H1 Breakdown)</div>
 <div class="analysis-content">{clean_tech}</div>
 <div style="margin-top:10px; border-top:1px solid rgba(255,255,255,0.1); padding-top:8px; font-size:0.85em; color:#94a3b8;">
 <strong>Patterns:</strong> {data.get('chart_pattern', '-')} | {data.get('candle_pattern', '-')}
 </div>
 </div>
 <div class="analysis-box">
-<div class="analysis-title">📰 NEWS SENTIMENT DRIVER</div>
+<div class="analysis-title">📰 NEWS SENTIMENT</div>
 <div class="analysis-content">{str(extra_data.get('news', 'Tidak ada data berita.')).replace(' - ', '<br>• ')}</div>
 </div>
 </div>
@@ -150,8 +150,8 @@ def render_card(symbol, data, bias, extra_data):
     return html
 
 # --- MAIN ---
-st.title("AltaQuant V5: High-Prob Engine")
-tab1, tab2 = st.tabs(["🚀 ANALISA MARKET", "📜 JURNAL & BELAJAR"])
+st.title("AltaQuant V5.3: Contextual Engine")
+tab1, tab2 = st.tabs(["🚀 ANALISA SOP", "📜 JURNAL"])
 
 with tab1:
     with st.sidebar:
@@ -159,7 +159,7 @@ with tab1:
         mode = st.radio("Mode Operasi", ["Manual Input", "Auto-Discovery"])
         sym_in = st.text_input("Simbol Aset", "BTC/USDT").upper() if mode == "Manual Input" else None
         st.markdown("---")
-        st.info("💡 **V5.0 Features:**\n- Smart Scoring (90% Filter)\n- Anti-Crash Protection\n- Market Execution")
+        st.info("💡 **V5.3 Features:**\n- Contextual Candle Analysis\n- Chart Pattern Recognition (24H)\n- SOP: Analisa -> Validasi -> Konfirmasi")
         btn = st.button("RUN ANALYSIS", type="primary")
 
     if 'results' not in st.session_state: st.session_state['results'] = []
@@ -169,28 +169,22 @@ with tab1:
         c1, c2 = st.columns(2)
         with c1: st.markdown(f'<div class="hero-metric"><div class="metric-lbl">BTC PRICE</div><div class="metric-val">${ov["btc_price"]:.2f}</div><div class="metric-lbl" style="color:{"#10b981" if ov["btc_change"]>0 else "#ef4444"}">{ov["btc_change"]:.2f}%</div></div>', unsafe_allow_html=True)
         with c2: st.markdown(f'<div class="hero-metric"><div class="metric-lbl">ETH PRICE</div><div class="metric-val">${ov["eth_price"]:.2f}</div><div class="metric-lbl" style="color:{"#10b981" if ov["eth_change"]>0 else "#ef4444"}">{ov["eth_change"]:.2f}%</div></div>', unsafe_allow_html=True)
-        st.info("👋 **Sistem V5 Siap.** Auto-Discovery sekarang menggunakan Scoring Algorithm untuk akurasi maksimal.")
+        st.info("👋 **Sistem Siap.** AI sekarang melihat konteks 'Hutan' (Chart 24h) sebelum memutuskan berdasarkan 'Pohon' (Candle).")
 
     if btn:
         st.session_state['results'] = []
-        with st.status("🔄 Mengaktifkan AltaQuant V5 Core...", expanded=True) as status:
+        with st.status("🔄 Menjalankan Analisa SOP Contextual...", expanded=True) as status:
             targets = []
             
-            # 1. SCANNING PROCESS
             if mode == "Auto-Discovery":
-                status.write("1. Scanning 100+ Assets (Smart Scoring Algorithm)...")
+                status.write("1. Scanning High-Prob Candidates...")
                 try:
-                    targets = scan_dynamic_market() # V5 Returns List of Dicts
-                    if not targets:
-                        status.update(label="Scanner Kosong", state="error")
-                        st.error("❌ Scanner tidak menemukan kandidat valid (Skor Rendah).")
-                except Exception as e:
-                    st.error(f"❌ Scanner Error: {e}")
-                    
+                    targets = scan_dynamic_market() 
+                    if not targets: st.error("Fatal Error: Scanner gagal.")
+                except Exception as e: st.error(f"Scanner Error: {e}")
             else:
                 targets = [{'symbol': sym_in, 'bias': 'MANUAL', 'poc': 0}]
 
-            # 2. ANALYSIS PROCESS
             results = []
             if targets:
                 prog = st.progress(0)
@@ -199,41 +193,48 @@ with tab1:
                     poc_scan = t.get('poc', 0)
                     prog.progress((idx+1)*int(100/len(targets)))
                     
-                    status.write(f"🔍 Deep Analysis: {sym}...")
+                    status.write(f"Analisa {sym}: Mencari Konfirmasi Pola...")
                     
-                    # TRY-EXCEPT BLOCK (ANTI-CRASH)
                     try:
                         df, context, poc_final, extra_data = get_ai_context_indo(sym, poc_scan)
                         
                         if df is not None:
                             current_price = df['close'].iloc[-1]
                             
-                            # PROMPT SNIPER V5
+                            # PROMPT V5.3 (CONTEXTUAL VALIDATION)
                             prompt = f"""
-                            Role: Institutional Sniper Trader.
-                            Tugas: Berikan Sinyal Trading MARKET ORDER untuk {sym}.
+                            Role: Institutional Technical Analyst.
+                            Tugas: Analisa {sym} dengan SOP KONTEKSTUAL (Trend -> Pattern -> Candle).
                             
-                            [DATA MARKET]:
+                            [DATA MARKET LENGKAP]:
                             HARGA SEKARANG: {current_price}
                             {context}
                             
-                            INSTRUKSI EKSEKUSI (WAJIB):
-                            1. **DECISION:** Koin ini terpilih karena skor teknikal tinggi. Tugas Anda memvalidasi arahnya (LONG/SHORT).
-                            2. **ENTRY:** Gunakan harga market {current_price}. Jangan Limit.
-                            3. **NO WAIT:** Jika berita error, abaikan. Jika market jelek, cari scalping opportunity.
-                            4. **OUTPUT JSON:** Isi semua angka.
+                            INSTRUKSI BERPIKIR (SOP):
+                            1. **LIHAT GAMBAR BESAR (24H OHLC):**
+                               - Perhatikan data '24 CANDLE TERAKHIR'. Apakah membentuk pola? (Flag, Channel, Consolidation, Double Top/Bottom).
+                               - Jangan melihat candle terakhir sendirian! Lihat apa yang terjadi sebelumnya.
+                            
+                            2. **CARI KONFIRMASI CANDLE (TRIGGER):**
+                               - Apakah candle terakhir (atau 2 terakhir) memberikan sinyal yang SEJALAN dengan pola grafik tersebut?
+                               - Contoh Valid: "Chart membentuk Bullish Flag (konsolidasi menurun), lalu muncul Bullish Engulfing yang memecahkan resistance flag. -> VALID LONG."
+                               - Contoh Invalid: "Chart Downtrend parah, muncul satu candle hijau kecil. -> INVALID."
+                            
+                            3. **KEPUTUSAN (MARKET ORDER):**
+                               - Jika ada pola yang terkonfirmasi, sikat (LONG/SHORT) di harga {current_price}.
+                               - Jika Auto-Discovery: WAJIB PILIH arah.
                             
                             OUTPUT JSON:
-                            - fundamental: (String).
-                            - teknikal: (String).
-                            - chart_pattern: ...
-                            - candle_pattern: ...
+                            - fundamental: Ringkasan fundamental singkat.
+                            - teknikal: Jelaskan hubungan antara CHART PATTERN (24h) dan CANDLE SIGNAL (Trigger). Kenapa valid?
+                            - chart_pattern: Pola grafik yang terlihat dari data 24 jam (misal: Sideways/Flag).
+                            - candle_pattern: Pola candle trigger (misal: Hammer).
                             - keputusan: "LONG" atau "SHORT".
                             - entry: "{current_price}".
-                            - sl: Angka Stop Loss.
+                            - sl: Angka Stop Loss (Logis sesuai pola).
                             - tp1: Angka Target 1.
                             - tp2: Angka Target 2.
-                            - alasan: ...
+                            - alasan: Sintesa akhir kenapa setup ini layak dieksekusi.
                             """
                             
                             raw = get_gemini_analysis(prompt)
@@ -241,7 +242,7 @@ with tab1:
                             results.append({'symbol': sym, 'data': parsed, 'df': df, 'bias': t['bias'], 'poc': poc_final, 'extra': extra_data})
                     
                     except Exception as e:
-                        print(f"Error analyzing {sym}: {e}") # Log error di terminal tapi jangan stop app
+                        print(f"Skip {sym}: {e}")
                         continue
                 
                 st.session_state['results'] = results

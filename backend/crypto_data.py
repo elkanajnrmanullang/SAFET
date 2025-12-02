@@ -58,6 +58,23 @@ def calc_volume_profile(df, bins=100):
         return (price_range[max_idx] + price_range[max_idx+1]) / 2
     except: return df['close'].iloc[-1]
 
+def get_fibonacci_levels(df, period=300):
+    """
+    Fibonacci Retracement (High/Low 300 candle terakhir ~ 12 Hari)
+    """
+    try:
+        relevant = df.tail(period)
+        high, low = relevant['high'].max(), relevant['low'].min()
+        diff = high - low
+        return {
+            "Low": low, "High": high,
+            "0.236": low + diff * 0.236,
+            "0.382": low + diff * 0.382,
+            "0.5": low + diff * 0.5,
+            "0.618 (Golden)": low + diff * 0.618
+        }
+    except: return {}
+
 def fetch_market_data(symbol, timeframe='1h', limit=1000): 
     try:
         exc = get_exchange()
@@ -78,6 +95,17 @@ def calc_technical_indicators(df):
         df['Vol_SMA'] = df['volume'].rolling(20).mean()
         df['ATR'] = df.ta.atr(length=14)
         
+        # Stochastic RSI
+        stoch = df.ta.stochrsi(length=14, rsi_length=14, k=3, d=3)
+        if stoch is not None:
+            df = pd.concat([df, stoch], axis=1)
+            cols = stoch.columns
+            df['Stoch_K'] = df[cols[0]]
+            df['Stoch_D'] = df[cols[1]]
+        else:
+            df['Stoch_K'], df['Stoch_D'] = 50, 50
+        
+        # Candle Patterns
         o, c, h, l = df['open'], df['close'], df['high'], df['low']
         body = abs(c - o)
         df['Is_Hammer'] = ((pd.concat([o, c], axis=1).min(axis=1) - l) > (body * 2)) & ((h - pd.concat([o, c], axis=1).max(axis=1)) < body)
@@ -89,19 +117,19 @@ def calc_technical_indicators(df):
         return df
     except: return df
 
-# --- SMART SCANNER V5.1 (FAIL-SAFE LOGIC) ---
+# --- SCANNER FAIL-SAFE (PASTI ADA HASIL) ---
 def scan_dynamic_market():
     try:
         exc = get_exchange()
         tickers = exc.fetch_tickers()
     except: return []
 
-    # Ambil 75 Koin Volume Terbesar
     valid_symbols = [s for s, d in tickers.items() if s.endswith('/USDT')]
+    # Ambil 75 Koin Volume Terbesar
     candidates = sorted(valid_symbols, key=lambda x: tickers[x].get('quoteVolume', 0), reverse=True)[:75]
     
-    high_quality_list = [] # Skor >= 4
-    backup_list = []       # Skor < 4 tapi volume hidup
+    hq_list = [] # High Quality (Skor >= 4)
+    backup_list = [] # Backup (Volume hidup)
     
     for sym in candidates:
         df = fetch_market_data(sym, '1h', limit=250)
@@ -111,62 +139,43 @@ def scan_dynamic_market():
         poc = calc_volume_profile(df)
         last = df.iloc[-1]
         
-        # --- SCORING ---
         score = 0
         bias = "NEUTRAL"
         
-        # 1. Trend
+        # Scoring Logic
         if last['close'] > last.get('EMA_200', 0): score += 3
         else: score -= 3
         
-        # 2. POC
         if last['close'] > poc: score += 2
         else: score -= 2
         
-        # 3. Momentum
         rsi = last.get('RSI', 50)
-        if rsi < 30: 
-            score += 6
-            bias = "LONG (Sniper Bounce)"
-        elif rsi > 70: 
-            score -= 6
-            bias = "SHORT (Sniper Pullback)"
-            
-        # 4. Pattern
-        if last['Is_Bull_Engulf']: score += 2
-        if last['Is_Bear_Engulf']: score -= 2
+        stoch_k = last.get('Stoch_K', 50)
         
+        # Momentum Sniper
+        if rsi < 35 and stoch_k < 20: 
+            score += 7; bias = "LONG (Sniper Bounce)"
+        elif rsi > 65 and stoch_k > 80: 
+            score -= 7; bias = "SHORT (Sniper Pullback)"
+            
         if "Sniper" not in bias:
-            if score > 3: bias = "LONG (Strong Trend)"
-            elif score < -3: bias = "SHORT (Strong Trend)"
+            if score > 3: bias = "LONG (Trend)"
+            elif score < -3: bias = "SHORT (Trend)"
             
-        # DATA PACK
-        candidate_data = {'symbol': sym, 'bias': bias, 'score': abs(score), 'poc': poc}
+        item = {'symbol': sym, 'bias': bias, 'score': abs(score), 'poc': poc}
         
-        # LOGIKA FAIL-SAFE:
-        # Masukkan ke Backup List (Asal volume ada)
+        # Fail-Safe Filter
         if last['volume'] > (last.get('Vol_SMA', 0) * 0.3):
-            backup_list.append(candidate_data)
+            backup_list.append(item)
+            if abs(score) >= 4: hq_list.append(item)
             
-            # Jika Skor Bagus, masukkan juga ke High Quality
-            if abs(score) >= 4:
-                high_quality_list.append(candidate_data)
-            
-    # RETURN LOGIC:
-    # Prioritas 1: Koin High Quality (Skor >= 4)
-    if high_quality_list:
-        return sorted(high_quality_list, key=lambda x: x['score'], reverse=True)[:3]
-    
-    # Prioritas 2: JIKA KOSONG, Ambil "Best of the Rest" dari Backup List
-    # (Ini menjamin Auto-Discovery tidak pernah kosong)
-    elif backup_list:
-        return sorted(backup_list, key=lambda x: x['score'], reverse=True)[:3]
-        
-    else:
-        return []
+    # Priority Return
+    if hq_list: return sorted(hq_list, key=lambda x: x['score'], reverse=True)[:3]
+    return sorted(backup_list, key=lambda x: x['score'], reverse=True)[:3]
 
-# --- AI CONTEXT GENERATOR ---
+# --- AI CONTEXT (UPGRADED VISION) ---
 def get_ai_context_indo(symbol, poc_val=0):
+    # Fetch Data (1000 Candle untuk Indikator Presisi)
     df_chart = fetch_market_data(symbol, '1h', limit=1000)
     df_trend = fetch_market_data(symbol, '1d', limit=1000)
     
@@ -179,6 +188,10 @@ def get_ai_context_indo(symbol, poc_val=0):
     l_1h = df_chart.iloc[-1]
     l_1d = df_trend.iloc[-1]
     
+    # Hitung Fibonacci & Indikator Lain
+    fibs = get_fibonacci_levels(df_chart)
+    fib_txt = ", ".join([f"{k}: {v:.2f}" for k, v in fibs.items()])
+    
     btc_trend = get_btc_trend()
     oi = fetch_open_interest(symbol)
     fund_data = get_fundamental_data(symbol)
@@ -189,28 +202,42 @@ def get_ai_context_indo(symbol, poc_val=0):
     if l_1h['Is_Hammer']: patt.append("Hammer")
     if l_1h['Is_Bull_Engulf']: patt.append("Bullish Engulfing")
     if l_1h['Is_Bear_Engulf']: patt.append("Bearish Engulfing")
-    candle_txt = ", ".join(patt) if patt else "Tidak ada pola signifikan"
+    candle_txt = ", ".join(patt) if patt else "Tidak ada"
     
     adaptive_rules = get_adaptive_rules()
     
+    # --- BAGIAN KUNCI: EXPANDED VISION (24 Candle) ---
+    chart_data = df_chart.tail(24)[['open','high','low','close']].values.tolist()
+    
     context = f"""
-    [ATURAN BELAJAR]: {adaptive_rules if adaptive_rules else "Analisa normal."}
-    [MARKET UTAMA]: BTC Trend (H4): {btc_trend}
-    [DATA TEKNIKAL {symbol}]:
-    - Harga: {l_1h['close']}
-    - POC: {poc_val:.4f}
-    - RSI H1: {l_1h['RSI']:.2f}
-    - Trend D1: {'BULLISH' if l_1d['close'] > l_1d['EMA_200'] else 'BEARISH'}
+    [SOP ANALISA USER (WAJIB IKUTI ALUR INI)]:
+    1. ANALISA MULTITIMEFRAME: Cek Trend Besar (D1/BTC) -> Breakdown ke H1.
+    2. VALIDASI STRUKTUR: Cek Support/Resist (POC, Fib), Indikator (RSI, Stoch).
+    3. KONFIRMASI POLA: Cek Chart Pattern (dari data 24 jam) & Candle Pattern.
+    
+    [1. BIG PICTURE (TREND MAYOR)]:
+    - BTC Trend (H4): {btc_trend}
+    - Trend D1 {symbol}: {'BULLISH' if l_1d['close'] > l_1d['EMA_200'] else 'BEARISH'} (Harga: {l_1d['close']} vs EMA200: {l_1d['EMA_200']:.2f})
+    
+    [2. BREAKDOWN H1 (STRUCTURE & MOMENTUM)]:
+    - Harga Saat Ini: {l_1h['close']}
+    - POC (Volume Profile Trend Mayor): {poc_val:.4f}
+    - Fibonacci Levels: {fib_txt}
+    - RSI (14): {l_1h['RSI']:.2f}
+    - Stochastic (K/D): {l_1h['Stoch_K']:.2f} / {l_1h['Stoch_D']:.2f}
     - Open Interest: {oi}
-    - Pola Candle: {candle_txt}
-    - Support/Resist: {l_1h['Sup']} / {l_1h['Res']}
     
-    [FUNDAMENTAL & BERITA]:
-    {fund_data}
+    [3. KONFIRMASI (PATTERN & CANDLE)]:
+    - Pola Candle Terakhir: {candle_txt}
+    - Support Terdekat: {l_1h['Sup']}
+    - Resistance Terdekat: {l_1h['Res']}
     
-    [NEWS SENTIMENT]:
-    Score: {sent_score}
-    Headlines: {news_data}
+    [DATA EKSTERNAL]:
+    - Fundamental: {fund_data}
+    - Sentiment Berita: {sent_score} ({news_data})
+    
+    [DATA CHART 24 JAM TERAKHIR (OHLC) - UNTUK ANALISA CHART PATTERN]:
+    {chart_data}
     """
     
     extra_data = {'btc_trend': btc_trend, 'sentiment': sent_score, 'news': news_data}
