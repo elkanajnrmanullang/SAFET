@@ -3,49 +3,22 @@ import pandas as pd
 import pandas_ta as ta
 import numpy as np
 from backend.database import get_adaptive_rules
+from backend.vision_pattern import detect_all_patterns
 
-# --- KONEKSI GLOBAL ---
+# --- KONEKSI ---
 def get_exchange():
-    return ccxt.binance({'enableRateLimit': True, 'timeout': 30000, 'options': {'defaultType': 'future'}})
+    return ccxt.binance({'enableRateLimit': True, 'options': {'defaultType': 'future'}})
 
-# --- MARKET OVERVIEW ---
 def get_market_overview():
     try:
         exc = get_exchange()
         btc = exc.fetch_ticker('BTC/USDT')
-        eth = exc.fetch_ticker('ETH/USDT')
-        return {
-            'btc_price': btc['last'], 'btc_change': btc['percentage'],
-            'eth_price': eth['last'], 'eth_change': eth['percentage']
-        }
-    except:
-        return {'btc_price': 0, 'btc_change': 0, 'eth_price': 0, 'eth_change': 0}
+        return {'btc_price': btc['last'], 'btc_change': btc['percentage']}
+    except: return {'btc_price': 0, 'btc_change': 0}
 
-# --- VOLUME PROFILE (POC) ---
-def calc_volume_profile(df, bins=100):
-    try:
-        price_min = df['low'].min()
-        price_max = df['high'].max()
-        price_range = np.linspace(price_min, price_max, bins)
-        volume_profile = np.zeros(bins - 1)
-        
-        for i in range(len(df)):
-            close_price = df['close'].iloc[i]
-            vol = df['volume'].iloc[i]
-            bin_idx = np.digitize(close_price, price_range) - 1
-            if 0 <= bin_idx < len(volume_profile):
-                volume_profile[bin_idx] += vol
-        
-        max_vol_idx = np.argmax(volume_profile)
-        return (price_range[max_vol_idx] + price_range[max_vol_idx+1]) / 2
-    except:
-        return df['close'].iloc[-1]
-
-# --- FETCH DATA ---
 def fetch_market_data(symbol, timeframe='1h', limit=1000):
     try:
         exc = get_exchange()
-        exc.ssl = False; exc.verify = False
         bars = exc.fetch_ohlcv(symbol, timeframe, limit=limit)
         if not bars: return None
         df = pd.DataFrame(bars, columns=['timestamp','open','high','low','close','volume'])
@@ -53,122 +26,125 @@ def fetch_market_data(symbol, timeframe='1h', limit=1000):
         return df
     except: return None
 
-# --- INDIKATOR INSTITUSIONAL (CLEAN & STANDARD) ---
+def calc_volume_profile(df, bins=100):
+    try:
+        price_min = df['low'].min(); price_max = df['high'].max()
+        price_range = np.linspace(price_min, price_max, bins)
+        vol_profile = np.zeros(bins-1)
+        for i in range(len(df)):
+            idx = np.digitize(df['close'].iloc[i], price_range) - 1
+            if 0 <= idx < len(vol_profile): vol_profile[idx] += df['volume'].iloc[i]
+        return (price_range[np.argmax(vol_profile)] + price_range[np.argmax(vol_profile)+1]) / 2
+    except: return df['close'].iloc[-1]
+
+# --- INDIKATOR LENGKAP v3.3 ---
 def calc_technical_indicators(df):
     if df is None or df.empty: return None
     try:
-        # 1. TREND: EMA 200 (King of Trend) & EMA 50 (Intermediate)
+        # 1. TREND
         df['EMA_50'] = df.ta.ema(length=50)
         df['EMA_200'] = df.ta.ema(length=200)
         
-        # 2. MOMENTUM: RSI 14 (Standard Industry)
+        # 2. MOMENTUM
         df['RSI'] = df.ta.rsi(length=14)
         
-        # 3. CONFIRMATION: MACD (12, 26, 9)
+        # 3. STOCH RSI
+        stoch = df.ta.stochrsi(length=14, rsi_length=14, k=3, d=3)
+        if stoch is not None:
+            df['Stoch_K'] = stoch.iloc[:, 0]
+            df['Stoch_D'] = stoch.iloc[:, 1]
+
+        # 4. MACD
         macd = df.ta.macd(fast=12, slow=26, signal=9)
         if macd is not None:
-            # MACD Line, Histogram, Signal
             df['MACD'] = macd.iloc[:, 0]
             df['MACD_Hist'] = macd.iloc[:, 1]
-            df['MACD_Signal'] = macd.iloc[:, 2]
         
-        # 4. VOLATILITY: ATR
+        # 5. VOLATILITY
         df['ATR'] = df.ta.atr(length=14)
-        
-        # 5. VOLUME: SMA Volume
         df['Vol_SMA'] = df['volume'].rolling(20).mean()
         
-        # 6. PRICE ACTION: Patterns
-        o = df['open']; c = df['close']; h = df['high']; l = df['low']
-        body = abs(c - o)
-        
-        df['Is_Hammer'] = ((pd.concat([o, c], axis=1).min(axis=1) - l) > (body * 2)) & \
-                          ((h - pd.concat([o, c], axis=1).max(axis=1)) < body)
-                          
-        prev_c = c.shift(1); prev_o = o.shift(1)
-        df['Is_Bull_Engulf'] = (c > o) & (prev_c < prev_o) & (c > prev_o) & (o < prev_c)
-        df['Is_Bear_Engulf'] = (c < o) & (prev_c > prev_o) & (c < prev_o) & (o > prev_c)
+        # 6. AUTO FIBONACCI
+        recent_high = df['high'].rolling(100).max()
+        recent_low = df['low'].rolling(100).min()
+        df['Fib_0'] = recent_low
+        df['Fib_1'] = recent_high
+        diff = recent_high - recent_low
+        df['Fib_0.618'] = recent_high - (diff * 0.618)
+        df['Fib_0.5'] = recent_high - (diff * 0.5)
 
-        # Structure
-        df['Sup'] = df['low'].rolling(50).min()
-        df['Res'] = df['high'].rolling(50).max()
+        # 7. CANDLE PATTERN
+        # Mengambil data pola candle dari pandas-ta
+        hammer_pat = df.ta.cdl_pattern(name="hammer")
+        engulf_pat = df.ta.cdl_pattern(name="engulfing")
+        
+        if hammer_pat is not None: df['Hammer'] = hammer_pat.iloc[:, 0]
+        else: df['Hammer'] = 0
+            
+        if engulf_pat is not None: df['Engulfing'] = engulf_pat.iloc[:, 0]
+        else: df['Engulfing'] = 0
         
         return df
-    except: return df
+    except Exception as e:
+        print(f"Err Indikator: {e}")
+        if 'Hammer' not in df.columns: df['Hammer'] = 0
+        if 'Engulfing' not in df.columns: df['Engulfing'] = 0
+        return df
 
-# --- SCANNER (PRO-GRADE LOGIC) ---
+# --- SCANNER BARU (VOLATILITY BASED) ---
 def scan_dynamic_market():
+    """
+    Scanner yang dimodifikasi sesuai request:
+    Mencari koin berdasarkan PERSENTASE PERUBAHAN HARGA (24h Change) tertinggi/terendah.
+    Mengabaikan filter volume $30jt.
+    """
     try:
         exc = get_exchange()
         tickers = exc.fetch_tickers()
-    except: return []
-
-    # 1. Filter Likuiditas (> $30M)
-    valid_symbols = []
-    for symbol, data in tickers.items():
-        if symbol.endswith('/USDT') and data.get('quoteVolume') is not None:
-            if data['quoteVolume'] > 30000000: 
-                valid_symbols.append(symbol)
-
-    # 2. Sort by Volatility (Top 60)
-    candidates_pool = sorted(valid_symbols, key=lambda x: abs(tickers[x].get('percentage', 0) or 0), reverse=True)[:60]
-    
-    final_picks = []
-    
-    for sym in candidates_pool:
-        df = fetch_market_data(sym, '1h', limit=300) # Cukup 300 untuk scan cepat
-        df = calc_technical_indicators(df)
         
-        if df is None or 'RSI' not in df.columns: continue
+        candidates = []
         
-        poc = calc_volume_profile(df, bins=50)
-        last = df.iloc[-1]
-        
-        price = last['close']
-        ema200 = last.get('EMA_200', 0)
-        ema50 = last.get('EMA_50', 0)
-        rsi = last.get('RSI', 50)
-        macd_hist = last.get('MACD_Hist', 0)
-        
-        bias = "NEUTRAL"; score = 0
-        
-        # --- INSTITUTIONAL STRATEGY: TREND CONTINUATION ---
-        
-        # LONG SETUP:
-        # 1. Harga > EMA 200 (Bull Market)
-        # 2. Harga > POC (Volume Support)
-        # 3. RSI 'Reset' (40-60) atau Oversold (<30) - BUKAN Overbought (>70)
-        # 4. MACD Histogram Positif (Momentum Naik)
-        if ema200 > 0 and price > ema200 and price > poc:
-            if rsi < 65 and macd_hist > 0:
-                bias = "LONG"
-                score += 2
-                if last['Is_Bull_Engulf']: score += 1
-                if price > ema50: score += 1 # Strong Trend
+        for symbol, data in tickers.items():
+            # Hanya ambil pasangan USDT
+            if symbol.endswith('/USDT'):
+                # Ambil persentase perubahan 24 jam
+                change_pct = data.get('percentage', 0)
                 
-        # SHORT SETUP:
-        # 1. Harga < EMA 200 (Bear Market)
-        # 2. Harga < POC (Volume Resistance)
-        # 3. RSI 'Reset' (40-60) atau Overbought (>70) - BUKAN Oversold (<30)
-        # 4. MACD Histogram Negatif (Momentum Turun)
-        elif ema200 > 0 and price < ema200 and price < poc:
-            if rsi > 35 and macd_hist < 0:
-                bias = "SHORT"
-                score += 2
-                if last['Is_Bear_Engulf']: score += 1
-                if price < ema50: score += 1 # Strong Trend
-
-        if bias != "NEUTRAL":
-            final_picks.append({'symbol': sym, 'bias': bias, 'score': score, 'poc': poc})
+                if change_pct is None: 
+                    change_pct = 0
+                
+                candidates.append({
+                    'symbol': symbol,
+                    'change': change_pct,
+                    'abs_change': abs(change_pct) # Kita cari pergerakan ekstrem (naik/turun)
+                })
+        
+        # Sorting berdasarkan pergerakan paling ekstrem (Top Gainers & Top Losers)
+        # Menggunakan nilai absolut agar minus besar (dump) juga terdeteksi
+        sorted_candidates = sorted(candidates, key=lambda x: x['abs_change'], reverse=True)
+        
+        final_picks = []
+        # Ambil Top 3 Koin paling volatil saat ini
+        for item in sorted_candidates[:3]:
+            # Tentukan bias awal sederhana untuk bantuan UI
+            bias = "LONG (PUMP)" if item['change'] > 0 else "SHORT (DUMP)"
             
-    # Return Top 3 Best Setups
-    final_picks = sorted(final_picks, key=lambda x: x['score'], reverse=True)
-    return final_picks[:3]
+            final_picks.append({
+                'symbol': item['symbol'], 
+                'bias': bias, 
+                'score': item['change'] # Menyimpan nilai % untuk ditampilkan
+            })
+            
+        return final_picks
 
-# --- AI CONTEXT GENERATOR ---
+    except Exception as e:
+        print(f"Scanner Error: {e}")
+        return []
+
+# --- AI BRAIN & CONTEXT ---
 def get_ai_context_indo(symbol, poc_val=0):
-    df_chart = fetch_market_data(symbol, '1h', limit=1000)
-    df_trend = fetch_market_data(symbol, '1d', limit=1000)
+    df_chart = fetch_market_data(symbol, '1h', limit=300)
+    df_trend = fetch_market_data(symbol, '1d', limit=300)
     
     if df_chart is None: return None, "Error", 0
     
@@ -176,39 +152,50 @@ def get_ai_context_indo(symbol, poc_val=0):
     df_trend = calc_technical_indicators(df_trend)
     
     if poc_val == 0: poc_val = calc_volume_profile(df_chart, bins=100)
-        
+    
     l_1h = df_chart.iloc[-1]
     l_1d = df_trend.iloc[-1]
     
-    patt = []
-    if l_1h['Is_Hammer']: patt.append("Hammer (Bullish)")
-    if l_1h['Is_Bull_Engulf']: patt.append("Bullish Engulfing")
-    if l_1h['Is_Bear_Engulf']: patt.append("Bearish Engulfing")
-    candle_txt = ", ".join(patt) if patt else "Netral"
+    # 1. Vision AI
+    vis_chart, vis_candle = detect_all_patterns(df_chart)
+    
+    # 2. Math Candle Check
+    math_candle = "Normal"
+    if l_1h.get('Hammer', 0) != 0: math_candle = "Hammer"
+    elif l_1h.get('Engulfing', 0) != 0: math_candle = "Engulfing"
+    
+    # 3. Fibs Check
+    fib_status = "Netral"
+    price = l_1h['close']
+    if 'Fib_0.618' in l_1h and abs(price - l_1h['Fib_0.618']) / price < 0.005: 
+        fib_status = "Rejection di Golden Ratio 0.618"
     
     adaptive_rules = get_adaptive_rules()
-    atr = l_1h.get('ATR', l_1h['close']*0.01)
     
     context = f"""
     [HISTORY PEMBELAJARAN]:
-    {adaptive_rules if adaptive_rules else "Analisa standar."}
+    {adaptive_rules if adaptive_rules else "Belum ada history."}
     
-    [DATA TEKNIKAL PROFESIONAL {symbol}]:
-    - Harga: {l_1h['close']}
-    - POC (Volume Profile): {poc_val:.4f}
+    [ANALISA VISUAL (MATA)]:
+    - Chart Pattern: {vis_chart}
+    - Candle Pattern: {vis_candle}
     
-    [INDIKATOR UTAMA]:
-    - EMA 200 (Trend King): {l_1h['EMA_200']:.2f} (Harga {'DI ATAS' if l_1h['close'] > l_1h['EMA_200'] else 'DI BAWAH'})
-    - RSI 14 (Momentum): {l_1h['RSI']:.2f} (Zona: {'OVERSOLD' if l_1h['RSI']<30 else 'OVERBOUGHT' if l_1h['RSI']>70 else 'NETRAL'})
-    - MACD Histogram: {l_1h.get('MACD_Hist', 0):.4f} ({'Momentum Bullish' if l_1h.get('MACD_Hist', 0) > 0 else 'Momentum Bearish'})
+    [DATA TEKNIKAL (LOGIKA)]:
+    - Harga: {price}
+    - Trend D1: {'BULLISH' if 'EMA_200' in l_1d and l_1d['close'] > l_1d['EMA_200'] else 'BEARISH'}
+    - EMA 200 H1: {l_1h.get('EMA_200', 0):.2f}
+    - Candle Math: {math_candle}
     
-    [STRUKTUR]:
-    - Pola Candle: {candle_txt}
-    - Support Terdekat: {l_1h['Sup']}
-    - Resistance Terdekat: {l_1h['Res']}
-    - ATR (Volatilitas): {atr:.4f}
+    [INDIKATOR]:
+    - RSI (14): {l_1h.get('RSI', 50):.2f}
+    - StochRSI: K={l_1h.get('Stoch_K', 0):.2f} / D={l_1h.get('Stoch_D', 0):.2f}
+    - MACD Hist: {l_1h.get('MACD_Hist', 0):.4f}
     
-    [150 CANDLE HISTORY (OHLC)]:
-    {df_chart.tail(150)[['open','high','low','close']].values.tolist()}
+    [LAINNYA]:
+    - POC: {poc_val:.2f}
+    - Fibs: {fib_status}
+    
+    [OHLC TERAKHIR]:
+    {df_chart.tail(5)[['open','high','low','close']].values.tolist()}
     """
     return df_chart, context, poc_val

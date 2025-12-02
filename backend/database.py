@@ -8,6 +8,12 @@ def init_db():
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
     
+    # --- RESET DATABASE (KHUSUS PENGUJIAN) ---
+    # Hapus baris di bawah ini jika data ingin dipertahankan di masa depan
+    # c.execute("DROP TABLE IF EXISTS trade_history")
+    # c.execute("DROP TABLE IF EXISTS learning_rules")
+    # -----------------------------------------
+    
     # Table History
     c.execute('''CREATE TABLE IF NOT EXISTS trade_history (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -67,43 +73,50 @@ def update_outcome_and_learn(trade_id, status, note):
     # 1. Update Status
     c.execute("UPDATE trade_history SET status = ?, outcome_note = ? WHERE id = ?", (status, note, trade_id))
     
-    # 2. Add Knowledge
+    # 2. Add Knowledge (Adaptive Learning)
     if status == 'LOSS':
         c.execute("INSERT INTO learning_rules (rule_type, keyword, description) VALUES (?, ?, ?)", 
                   ('AVOID', 'User Feedback', note))
     elif status == 'WIN':
         c.execute("INSERT INTO learning_rules (rule_type, keyword, description) VALUES (?, ?, ?)", 
-                  ('PREFER', 'Winning Pattern', 'Pola sukses terkonfirmasi.'))
+                  ('PREFER', 'Winning Pattern', note))
                   
     conn.commit()
     conn.close()
 
 def get_adaptive_rules():
+    """Mengambil aturan pembelajaran (AVOID & PREFER)"""
     conn = sqlite3.connect(DB_NAME)
     conn.row_factory = sqlite3.Row
     c = conn.cursor()
     
-    c.execute("SELECT description FROM learning_rules WHERE rule_type = 'AVOID'")
+    # Ambil Kesalahan (AVOID)
+    c.execute("SELECT description FROM learning_rules WHERE rule_type = 'AVOID' ORDER BY id DESC LIMIT 5")
     avoids = [r['description'] for r in c.fetchall()]
+
+    # Ambil Pola Sukses (PREFER)
+    c.execute("SELECT description FROM learning_rules WHERE rule_type = 'PREFER' ORDER BY id DESC LIMIT 5")
+    prefers = [r['description'] for r in c.fetchall()]
+    
     conn.close()
     
     rules_text = ""
     if avoids:
-        rules_text += "HINDARI KESALAHAN BERIKUT (DARI PENGALAMAN MASA LALU):\n"
+        rules_text += "\n[⚠️ JANGAN ULANGI KESALAHAN INI]:\n"
         for i, rule in enumerate(avoids):
-            rules_text += f"{i+1}. {rule}\n"
+            rules_text += f"- {rule}\n"
+            
+    if prefers:
+        rules_text += "\n[✅ ULANGI POLA SUKSES INI]:\n"
+        for i, rule in enumerate(prefers):
+            rules_text += f"- {rule}\n"
             
     return rules_text
 
-# --- STATISTICS ENGINE (INI YANG WAJIB ADA) ---
+# --- STATISTICS ENGINE (ACCURACY TEST) ---
 def get_performance_stats():
-    """
-    Menghitung statistik performa trading berdasarkan history user.
-    """
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-    
-    # Ambil semua status yang sudah selesai (WIN/LOSS)
     c.execute("SELECT status FROM trade_history WHERE status IN ('WIN', 'LOSS')")
     data = c.fetchall()
     conn.close()
@@ -116,12 +129,7 @@ def get_performance_stats():
     losses = total - wins
     win_rate = (wins / total) * 100
     
-    return {
-        "win_rate": win_rate,
-        "wins": wins,
-        "losses": losses,
-        "total": total
-    }
+    return {"win_rate": win_rate, "wins": wins, "losses": losses, "total": total}
 
-# Init on import
+# Init on import (Akan mereset DB karena ada DROP TABLE)
 init_db()
