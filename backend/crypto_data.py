@@ -7,7 +7,11 @@ from backend.vision_pattern import detect_all_patterns
 
 # --- KONEKSI ---
 def get_exchange():
-    return ccxt.binance({'enableRateLimit': True, 'options': {'defaultType': 'future'}})
+    # Menggunakan opsi 'future' agar sesuai dengan data Binance Futures
+    return ccxt.binance({
+        'enableRateLimit': True, 
+        'options': {'defaultType': 'future'}
+    })
 
 def get_market_overview():
     try:
@@ -74,7 +78,6 @@ def calc_technical_indicators(df):
         df['Fib_0.5'] = recent_high - (diff * 0.5)
 
         # 7. CANDLE PATTERN
-        # Mengambil data pola candle dari pandas-ta
         hammer_pat = df.ta.cdl_pattern(name="hammer")
         engulf_pat = df.ta.cdl_pattern(name="engulfing")
         
@@ -87,16 +90,16 @@ def calc_technical_indicators(df):
         return df
     except Exception as e:
         print(f"Err Indikator: {e}")
-        if 'Hammer' not in df.columns: df['Hammer'] = 0
-        if 'Engulfing' not in df.columns: df['Engulfing'] = 0
         return df
 
-# --- SCANNER BARU (VOLATILITY BASED) ---
+# --- SCANNER FIXED (Top 10 Gainers/Losers -> 5 Best Liquid) ---
 def scan_dynamic_market():
     """
-    Scanner yang dimodifikasi sesuai request:
-    Mencari koin berdasarkan PERSENTASE PERUBAHAN HARGA (24h Change) tertinggi/terendah.
-    Mengabaikan filter volume $30jt.
+    1. Ambil semua ticker Futures.
+    2. Filter symbol yang valid (USDT pair).
+    3. Urutkan berdasarkan ABSOLUTE % CHANGE (Mencari Top Gainers & Top Losers).
+    4. Ambil Top 10 paling bergerak.
+    5. Dari 10 itu, ambil 5 dengan Volume (Quote USDT) terbesar.
     """
     try:
         exc = get_exchange()
@@ -105,36 +108,45 @@ def scan_dynamic_market():
         candidates = []
         
         for symbol, data in tickers.items():
-            # Hanya ambil pasangan USDT
-            if symbol.endswith('/USDT'):
-                # Ambil persentase perubahan 24 jam
-                change_pct = data.get('percentage', 0)
+            # Filter hanya pair USDT dan hindari pair aneh (seperti index leverage)
+            if '/USDT' in symbol and 'UP/' not in symbol and 'DOWN/' not in symbol:
                 
-                if change_pct is None: 
-                    change_pct = 0
+                # Handle data None/Kosong dengan aman
+                change_pct = data.get('percentage')
+                if change_pct is None: change_pct = 0.0
                 
-                candidates.append({
-                    'symbol': symbol,
-                    'change': change_pct,
-                    'abs_change': abs(change_pct) # Kita cari pergerakan ekstrem (naik/turun)
-                })
+                # Gunakan quoteVolume (Volume dalam USDT) jika ada, jika tidak pakai baseVolume * price
+                vol_usdt = data.get('quoteVolume')
+                if vol_usdt is None:
+                    vol_usdt = (data.get('baseVolume') or 0) * (data.get('last') or 0)
+                
+                # Filter koin dengan volume terlalu kecil (misal di bawah $10jt) agar tidak terjebak koin gorengan
+                if vol_usdt > 10_000_000: 
+                    candidates.append({
+                        'symbol': symbol,
+                        'change': float(change_pct),
+                        'abs_change': abs(float(change_pct)), # Mutlak agar minus besar juga masuk
+                        'volume': float(vol_usdt)
+                    })
         
-        # Sorting berdasarkan pergerakan paling ekstrem (Top Gainers & Top Losers)
-        # Menggunakan nilai absolut agar minus besar (dump) juga terdeteksi
-        sorted_candidates = sorted(candidates, key=lambda x: x['abs_change'], reverse=True)
+        # TAHAP 1: Ambil 10 Koin dengan Pergerakan Terbesar (Top Volatility)
+        # Sort desc berdasarkan abs_change
+        top_10_volatile = sorted(candidates, key=lambda x: x['abs_change'], reverse=True)[:10]
+        
+        # TAHAP 2: Dari 10 itu, pilih 5 yang paling Likuid (Volume Terbesar)
+        # Sort desc berdasarkan volume
+        best_5_liquid = sorted(top_10_volatile, key=lambda x: x['volume'], reverse=True)[:5]
         
         final_picks = []
-        # Ambil Top 3 Koin paling volatil saat ini
-        for item in sorted_candidates[:3]:
-            # Tentukan bias awal sederhana untuk bantuan UI
+        for item in best_5_liquid:
             bias = "LONG (PUMP)" if item['change'] > 0 else "SHORT (DUMP)"
-            
             final_picks.append({
                 'symbol': item['symbol'], 
                 'bias': bias, 
-                'score': item['change'] # Menyimpan nilai % untuk ditampilkan
+                'score': item['change']
             })
             
+        print(f"Scanner Result: {[x['symbol'] for x in final_picks]}") # Debug log di terminal
         return final_picks
 
     except Exception as e:
@@ -143,6 +155,7 @@ def scan_dynamic_market():
 
 # --- AI BRAIN & CONTEXT ---
 def get_ai_context_indo(symbol, poc_val=0):
+    # Gunakan fungsi yang sudah ada
     df_chart = fetch_market_data(symbol, '1h', limit=300)
     df_trend = fetch_market_data(symbol, '1d', limit=300)
     
@@ -156,15 +169,12 @@ def get_ai_context_indo(symbol, poc_val=0):
     l_1h = df_chart.iloc[-1]
     l_1d = df_trend.iloc[-1]
     
-    # 1. Vision AI
     vis_chart, vis_candle = detect_all_patterns(df_chart)
     
-    # 2. Math Candle Check
     math_candle = "Normal"
     if l_1h.get('Hammer', 0) != 0: math_candle = "Hammer"
     elif l_1h.get('Engulfing', 0) != 0: math_candle = "Engulfing"
     
-    # 3. Fibs Check
     fib_status = "Netral"
     price = l_1h['close']
     if 'Fib_0.618' in l_1h and abs(price - l_1h['Fib_0.618']) / price < 0.005: 
