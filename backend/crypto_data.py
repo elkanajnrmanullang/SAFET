@@ -2,7 +2,7 @@ import ccxt
 import pandas as pd
 import pandas_ta as ta
 import numpy as np
-from backend.database import get_adaptive_rules
+from backend.database import save_trade, get_history, update_outcome, update_outcome_and_learn, get_performance_stats
 
 # --- INTEGRASI MODUL EKSTERNAL ---
 try:
@@ -59,9 +59,6 @@ def calc_volume_profile(df, bins=100):
     except: return df['close'].iloc[-1]
 
 def get_fibonacci_levels(df, period=300):
-    """
-    Fibonacci Retracement (High/Low 300 candle terakhir ~ 12 Hari)
-    """
     try:
         relevant = df.tail(period)
         high, low = relevant['high'].max(), relevant['low'].min()
@@ -71,7 +68,7 @@ def get_fibonacci_levels(df, period=300):
             "0.236": low + diff * 0.236,
             "0.382": low + diff * 0.382,
             "0.5": low + diff * 0.5,
-            "0.618 (Golden)": low + diff * 0.618
+            "0.618": low + diff * 0.618
         }
     except: return {}
 
@@ -95,7 +92,6 @@ def calc_technical_indicators(df):
         df['Vol_SMA'] = df['volume'].rolling(20).mean()
         df['ATR'] = df.ta.atr(length=14)
         
-        # Stochastic RSI
         stoch = df.ta.stochrsi(length=14, rsi_length=14, k=3, d=3)
         if stoch is not None:
             df = pd.concat([df, stoch], axis=1)
@@ -105,7 +101,6 @@ def calc_technical_indicators(df):
         else:
             df['Stoch_K'], df['Stoch_D'] = 50, 50
         
-        # Candle Patterns
         o, c, h, l = df['open'], df['close'], df['high'], df['low']
         body = abs(c - o)
         df['Is_Hammer'] = ((pd.concat([o, c], axis=1).min(axis=1) - l) > (body * 2)) & ((h - pd.concat([o, c], axis=1).max(axis=1)) < body)
@@ -117,65 +112,67 @@ def calc_technical_indicators(df):
         return df
     except: return df
 
-# --- SCANNER FAIL-SAFE (PASTI ADA HASIL) ---
+# --- SCANNER V6.0 (UNBREAKABLE / NO-EMPTY RETURN) ---
 def scan_dynamic_market():
+    # DAFTAR DARURAT (Major Pairs)
+    FALLBACK_COINS = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT']
+    candidates = []
+    
+    # 1. Coba Ambil Top Koin dari Binance
     try:
         exc = get_exchange()
         tickers = exc.fetch_tickers()
-    except: return []
+        valid_symbols = [s for s, d in tickers.items() if s.endswith('/USDT')]
+        candidates = sorted(valid_symbols, key=lambda x: tickers[x].get('quoteVolume', 0), reverse=True)[:50] # Kurangi jadi 50 biar cepat
+    except:
+        print("⚠️ Koneksi Binance Bermasalah. Menggunakan Mode Darurat.")
+        candidates = FALLBACK_COINS
 
-    valid_symbols = [s for s, d in tickers.items() if s.endswith('/USDT')]
-    # Ambil 75 Koin Volume Terbesar
-    candidates = sorted(valid_symbols, key=lambda x: tickers[x].get('quoteVolume', 0), reverse=True)[:75]
+    scored_candidates = []
     
-    hq_list = [] # High Quality (Skor >= 4)
-    backup_list = [] # Backup (Volume hidup)
-    
+    # 2. Analisa Kandidat
     for sym in candidates:
-        df = fetch_market_data(sym, '1h', limit=250)
-        df = calc_technical_indicators(df)
-        if df is None or 'RSI' not in df.columns: continue
-        
-        poc = calc_volume_profile(df)
-        last = df.iloc[-1]
-        
-        score = 0
-        bias = "NEUTRAL"
-        
-        # Scoring Logic
-        if last['close'] > last.get('EMA_200', 0): score += 3
-        else: score -= 3
-        
-        if last['close'] > poc: score += 2
-        else: score -= 2
-        
-        rsi = last.get('RSI', 50)
-        stoch_k = last.get('Stoch_K', 50)
-        
-        # Momentum Sniper
-        if rsi < 35 and stoch_k < 20: 
-            score += 7; bias = "LONG (Sniper Bounce)"
-        elif rsi > 65 and stoch_k > 80: 
-            score -= 7; bias = "SHORT (Sniper Pullback)"
+        try:
+            df = fetch_market_data(sym, '1h', limit=200) # Limit kecil untuk scan cepat
+            df = calc_technical_indicators(df)
+            if df is None or 'RSI' not in df.columns: continue
             
-        if "Sniper" not in bias:
-            if score > 3: bias = "LONG (Trend)"
-            elif score < -3: bias = "SHORT (Trend)"
+            poc = calc_volume_profile(df)
+            last = df.iloc[-1]
             
-        item = {'symbol': sym, 'bias': bias, 'score': abs(score), 'poc': poc}
-        
-        # Fail-Safe Filter
-        if last['volume'] > (last.get('Vol_SMA', 0) * 0.3):
-            backup_list.append(item)
-            if abs(score) >= 4: hq_list.append(item)
+            score = 0
+            bias = "NEUTRAL"
             
-    # Priority Return
-    if hq_list: return sorted(hq_list, key=lambda x: x['score'], reverse=True)[:3]
-    return sorted(backup_list, key=lambda x: x['score'], reverse=True)[:3]
+            # Simple Scoring untuk Scanner
+            if last['close'] > last.get('EMA_200', 0): score += 2
+            else: score -= 2
+            
+            rsi = last.get('RSI', 50)
+            if rsi < 30: score += 5; bias = "LONG (Oversold)"
+            elif rsi > 70: score -= 5; bias = "SHORT (Overbought)"
+            
+            if "Over" not in bias:
+                if score > 0: bias = "LONG (Trend)"
+                else: bias = "SHORT (Trend)"
+                
+            scored_candidates.append({'symbol': sym, 'bias': bias, 'score': abs(score), 'poc': poc})
+        except:
+            continue
+            
+    # 3. KEPUTUSAN FINAL (TIDAK BOLEH KOSONG)
+    if scored_candidates:
+        return sorted(scored_candidates, key=lambda x: x['score'], reverse=True)[:3]
+    else:
+        # Jika semua gagal (misal IP ke-ban atau internet down total),
+        # Kembalikan hardcoded list agar UI tidak crash dan User tau ada masalah koneksi.
+        return [
+            {'symbol': 'BTC/USDT', 'bias': 'Cek Manual (Koneksi Error)', 'score': 0, 'poc': 0},
+            {'symbol': 'ETH/USDT', 'bias': 'Cek Manual (Koneksi Error)', 'score': 0, 'poc': 0},
+            {'symbol': 'SOL/USDT', 'bias': 'Cek Manual (Koneksi Error)', 'score': 0, 'poc': 0}
+        ]
 
-# --- AI CONTEXT (UPGRADED VISION) ---
+# --- AI CONTEXT GENERATOR ---
 def get_ai_context_indo(symbol, poc_val=0):
-    # Fetch Data (1000 Candle untuk Indikator Presisi)
     df_chart = fetch_market_data(symbol, '1h', limit=1000)
     df_trend = fetch_market_data(symbol, '1d', limit=1000)
     
@@ -188,7 +185,6 @@ def get_ai_context_indo(symbol, poc_val=0):
     l_1h = df_chart.iloc[-1]
     l_1d = df_trend.iloc[-1]
     
-    # Hitung Fibonacci & Indikator Lain
     fibs = get_fibonacci_levels(df_chart)
     fib_txt = ", ".join([f"{k}: {v:.2f}" for k, v in fibs.items()])
     
@@ -206,37 +202,35 @@ def get_ai_context_indo(symbol, poc_val=0):
     
     adaptive_rules = get_adaptive_rules()
     
-    # --- BAGIAN KUNCI: EXPANDED VISION (24 Candle) ---
     chart_data = df_chart.tail(24)[['open','high','low','close']].values.tolist()
     
     context = f"""
-    [SOP ANALISA USER (WAJIB IKUTI ALUR INI)]:
-    1. ANALISA MULTITIMEFRAME: Cek Trend Besar (D1/BTC) -> Breakdown ke H1.
-    2. VALIDASI STRUKTUR: Cek Support/Resist (POC, Fib), Indikator (RSI, Stoch).
-    3. KONFIRMASI POLA: Cek Chart Pattern (dari data 24 jam) & Candle Pattern.
+    [SOP ANALISA USER]:
+    1. TREND (D1): Cek arah besar.
+    2. STRUKTUR (H1): Support/Resist, Fibonacci, POC.
+    3. TRIGGER: Candle Pattern & RSI/Stoch.
     
-    [1. BIG PICTURE (TREND MAYOR)]:
-    - BTC Trend (H4): {btc_trend}
-    - Trend D1 {symbol}: {'BULLISH' if l_1d['close'] > l_1d['EMA_200'] else 'BEARISH'} (Harga: {l_1d['close']} vs EMA200: {l_1d['EMA_200']:.2f})
+    [1. BIG PICTURE]:
+    - BTC Trend: {btc_trend}
+    - D1 {symbol}: {'BULLISH' if l_1d['close'] > l_1d['EMA_200'] else 'BEARISH'}
     
-    [2. BREAKDOWN H1 (STRUCTURE & MOMENTUM)]:
-    - Harga Saat Ini: {l_1h['close']}
-    - POC (Volume Profile Trend Mayor): {poc_val:.4f}
-    - Fibonacci Levels: {fib_txt}
-    - RSI (14): {l_1h['RSI']:.2f}
-    - Stochastic (K/D): {l_1h['Stoch_K']:.2f} / {l_1h['Stoch_D']:.2f}
+    [2. H1 BREAKDOWN]:
+    - Harga: {l_1h['close']}
+    - POC: {poc_val:.4f}
+    - Fibonacci: {fib_txt}
+    - RSI: {l_1h['RSI']:.2f}
+    - Stoch (K/D): {l_1h['Stoch_K']:.2f} / {l_1h['Stoch_D']:.2f}
     - Open Interest: {oi}
     
-    [3. KONFIRMASI (PATTERN & CANDLE)]:
-    - Pola Candle Terakhir: {candle_txt}
-    - Support Terdekat: {l_1h['Sup']}
-    - Resistance Terdekat: {l_1h['Res']}
+    [3. KONFIRMASI]:
+    - Candle: {candle_txt}
+    - S/R Terdekat: {l_1h['Sup']} / {l_1h['Res']}
     
     [DATA EKSTERNAL]:
     - Fundamental: {fund_data}
-    - Sentiment Berita: {sent_score} ({news_data})
+    - Berita: {sent_score} ({news_data})
     
-    [DATA CHART 24 JAM TERAKHIR (OHLC) - UNTUK ANALISA CHART PATTERN]:
+    [CHART 24 JAM (OHLC)]:
     {chart_data}
     """
     

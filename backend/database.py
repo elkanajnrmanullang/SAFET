@@ -39,7 +39,6 @@ def save_trade(symbol, data):
     c.execute('''INSERT INTO trade_history (symbol, action, entry, sl, tp, reason, timestamp)
                  VALUES (?, ?, ?, ?, ?, ?, ?)''', 
               (symbol, data.get('keputusan'), data.get('entry'), data.get('sl'), 
-               # Handle TP1/TP2 combination for storage
                f"TP1:{data.get('tp1')} | TP2:{data.get('tp2')}", 
                data.get('alasan'), datetime.now()))
     conn.commit()
@@ -54,7 +53,6 @@ def get_history():
     conn.close()
     return rows
 
-# --- UPDATE SIMPLE (FIX IMPORT ERROR) ---
 def update_outcome(trade_id, status, note=""):
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
@@ -62,7 +60,6 @@ def update_outcome(trade_id, status, note=""):
     conn.commit()
     conn.close()
 
-# --- UPDATE & LEARN (SMART LOGIC) ---
 def update_outcome_and_learn(trade_id, status, note):
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
@@ -81,7 +78,6 @@ def update_outcome_and_learn(trade_id, status, note):
     conn.commit()
     conn.close()
 
-# --- RETRIEVE KNOWLEDGE ---
 def get_adaptive_rules():
     conn = sqlite3.connect(DB_NAME)
     conn.row_factory = sqlite3.Row
@@ -89,7 +85,6 @@ def get_adaptive_rules():
     
     c.execute("SELECT description FROM learning_rules WHERE rule_type = 'AVOID'")
     avoids = [r['description'] for r in c.fetchall()]
-    
     conn.close()
     
     rules_text = ""
@@ -99,6 +94,34 @@ def get_adaptive_rules():
             rules_text += f"{i+1}. {rule}\n"
             
     return rules_text
+
+# --- STATISTICS ENGINE (INI YANG WAJIB ADA) ---
+def get_performance_stats():
+    """
+    Menghitung statistik performa trading berdasarkan history user.
+    """
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    
+    # Ambil semua status yang sudah selesai (WIN/LOSS)
+    c.execute("SELECT status FROM trade_history WHERE status IN ('WIN', 'LOSS')")
+    data = c.fetchall()
+    conn.close()
+    
+    total = len(data)
+    if total == 0:
+        return {"win_rate": 0.0, "wins": 0, "losses": 0, "total": 0}
+    
+    wins = sum(1 for x in data if x[0] == 'WIN')
+    losses = total - wins
+    win_rate = (wins / total) * 100
+    
+    return {
+        "win_rate": win_rate,
+        "wins": wins,
+        "losses": losses,
+        "total": total
+    }
 
 # Init on import
 init_db()

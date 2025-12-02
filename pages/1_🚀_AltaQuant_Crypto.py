@@ -5,9 +5,10 @@ import re
 import time
 from backend.crypto_data import get_ai_context_indo, scan_dynamic_market, get_market_overview
 from backend.ai_engine import get_gemini_analysis
-from backend.database import save_trade, get_history, update_outcome, update_outcome_and_learn
+# FIX IMPORT: Menambahkan get_performance_stats agar tidak NameError
+from backend.database import save_trade, get_history, update_outcome, update_outcome_and_learn, get_performance_stats
 
-st.set_page_config(page_title="AltaQuant Pro V5.3", layout="wide")
+st.set_page_config(page_title="AltaQuant Pro V6.0", layout="wide")
 
 # --- CSS ---
 st.markdown("""
@@ -116,7 +117,7 @@ def render_card(symbol, data, bias, extra_data):
 </div>
 <div style="text-align:right;">
 <span style="color:{theme}; font-weight:bold; font-size:1.2em; letter-spacing:1px;">BIAS: {bias}</span><br>
-<small style="color:#94a3b8; font-size:0.75em;">SOP: TOP-DOWN CONTEXT</small>
+<small style="color:#94a3b8; font-size:0.75em;">INSTITUTIONAL V6.0</small>
 </div>
 </div>
 <div class="grid-info">
@@ -150,8 +151,8 @@ def render_card(symbol, data, bias, extra_data):
     return html
 
 # --- MAIN ---
-st.title("AltaQuant V5.3: Contextual Engine")
-tab1, tab2 = st.tabs(["🚀 ANALISA SOP", "📜 JURNAL"])
+st.title("AltaQuant V6: Final Institutional Engine")
+tab1, tab2 = st.tabs(["🚀 ANALISA SOP", "📊 SCOREBOARD"])
 
 with tab1:
     with st.sidebar:
@@ -159,7 +160,7 @@ with tab1:
         mode = st.radio("Mode Operasi", ["Manual Input", "Auto-Discovery"])
         sym_in = st.text_input("Simbol Aset", "BTC/USDT").upper() if mode == "Manual Input" else None
         st.markdown("---")
-        st.info("💡 **V5.3 Features:**\n- Contextual Candle Analysis\n- Chart Pattern Recognition (24H)\n- SOP: Analisa -> Validasi -> Konfirmasi")
+        st.info("💡 **V6.0 Features:**\n- Scoreboard & Win Rate\n- Anti-Crash Scanner\n- SOP Top-Down Analysis")
         btn = st.button("RUN ANALYSIS", type="primary")
 
     if 'results' not in st.session_state: st.session_state['results'] = []
@@ -169,7 +170,7 @@ with tab1:
         c1, c2 = st.columns(2)
         with c1: st.markdown(f'<div class="hero-metric"><div class="metric-lbl">BTC PRICE</div><div class="metric-val">${ov["btc_price"]:.2f}</div><div class="metric-lbl" style="color:{"#10b981" if ov["btc_change"]>0 else "#ef4444"}">{ov["btc_change"]:.2f}%</div></div>', unsafe_allow_html=True)
         with c2: st.markdown(f'<div class="hero-metric"><div class="metric-lbl">ETH PRICE</div><div class="metric-val">${ov["eth_price"]:.2f}</div><div class="metric-lbl" style="color:{"#10b981" if ov["eth_change"]>0 else "#ef4444"}">{ov["eth_change"]:.2f}%</div></div>', unsafe_allow_html=True)
-        st.info("👋 **Sistem Siap.** AI sekarang melihat konteks 'Hutan' (Chart 24h) sebelum memutuskan berdasarkan 'Pohon' (Candle).")
+        st.info("👋 **Sistem Siap.** Tab Scoreboard sekarang aktif untuk memantau Win Rate Anda.")
 
     if btn:
         st.session_state['results'] = []
@@ -201,7 +202,6 @@ with tab1:
                         if df is not None:
                             current_price = df['close'].iloc[-1]
                             
-                            # PROMPT V5.3 (CONTEXTUAL VALIDATION)
                             prompt = f"""
                             Role: Institutional Technical Analyst.
                             Tugas: Analisa {sym} dengan SOP KONTEKSTUAL (Trend -> Pattern -> Candle).
@@ -213,12 +213,9 @@ with tab1:
                             INSTRUKSI BERPIKIR (SOP):
                             1. **LIHAT GAMBAR BESAR (24H OHLC):**
                                - Perhatikan data '24 CANDLE TERAKHIR'. Apakah membentuk pola? (Flag, Channel, Consolidation, Double Top/Bottom).
-                               - Jangan melihat candle terakhir sendirian! Lihat apa yang terjadi sebelumnya.
                             
                             2. **CARI KONFIRMASI CANDLE (TRIGGER):**
                                - Apakah candle terakhir (atau 2 terakhir) memberikan sinyal yang SEJALAN dengan pola grafik tersebut?
-                               - Contoh Valid: "Chart membentuk Bullish Flag (konsolidasi menurun), lalu muncul Bullish Engulfing yang memecahkan resistance flag. -> VALID LONG."
-                               - Contoh Invalid: "Chart Downtrend parah, muncul satu candle hijau kecil. -> INVALID."
                             
                             3. **KEPUTUSAN (MARKET ORDER):**
                                - Jika ada pola yang terkonfirmasi, sikat (LONG/SHORT) di harga {current_price}.
@@ -262,34 +259,59 @@ with tab1:
         st.divider()
 
 with tab2:
-    st.header("Jurnal & Evaluasi Model")
+    st.header("📊 Performance Dashboard")
+    
+    # --- LIVE SCOREBOARD ---
+    # Fungsi ini sekarang aman dipanggil karena sudah diimport
+    stats = get_performance_stats()
+    
+    m1, m2, m3, m4 = st.columns(4)
+    with m1: st.metric("Total Trades", f"{stats['total']}", help="Total trade yang sudah selesai")
+    with m2: st.metric("Win Rate", f"{stats['win_rate']:.1f}%", help="Persentase kemenangan")
+    with m3: st.metric("Wins", f"{stats['wins']} ✅")
+    with m4: st.metric("Losses", f"{stats['losses']} ❌")
+        
+    if stats['total'] > 0:
+        st.write("### Akurasi Sistem:")
+        st.progress(stats['win_rate'] / 100)
+    
+    st.markdown("---")
+    st.subheader("📜 Trade Log")
+    
     history = get_history()
+    
     for row in history:
         with st.container():
-            st.markdown(f'<div class="hist-card">', unsafe_allow_html=True)
+            status_color = "#10b981" if row['status'] == 'WIN' else "#ef4444" if row['status'] == 'LOSS' else "#334155"
+            border_style = f"border-left: 5px solid {status_color};"
+            
+            st.markdown(f'<div class="hist-card" style="{border_style}">', unsafe_allow_html=True)
             col1, col2, col3 = st.columns([2, 4, 2])
+            
             with col1:
                 st.subheader(row['symbol'])
                 st.caption(row['timestamp'][:16])
+                st.markdown(f'<span style="background:{status_color}; padding:2px 8px; border-radius:4px; font-weight:bold; font-size:0.8em;">{row["status"]}</span>', unsafe_allow_html=True)
+                
             with col2:
-                st.write(f"**Alasan:** {row['reason']}")
-                if row['outcome_note']: st.info(f"Catatan Belajar: {row['outcome_note']}")
+                st.write(f"**Setup:** {row['reason']}")
+                if row['outcome_note']: st.info(f"Evaluasi: {row['outcome_note']}")
+                    
             with col3:
                 if row['status'] == 'OPEN':
                     c1_in, c2_in = st.columns(2)
                     with c1_in:
                         if st.button("WIN ✅", key=f"w{row['id']}"):
-                            update_outcome_and_learn(row['id'], 'WIN', "Pola Sukses")
+                            update_outcome_and_learn(row['id'], 'WIN', "Sesuai Analisa")
                             st.rerun()
                     with c2_in:
                         if st.button("LOSS ❌", key=f"l{row['id']}"):
                             st.session_state[f"fail_{row['id']}"] = True
+                    
                     if st.session_state.get(f"fail_{row['id']}"):
-                        note = st.text_input("Kenapa Salah?", key=f"n{row['id']}")
-                        if st.button("Simpan & Pelajari", key=f"s{row['id']}"):
+                        note = st.text_input("Kenapa Loss?", key=f"n{row['id']}")
+                        if st.button("Simpan", key=f"s{row['id']}"):
                             update_outcome_and_learn(row['id'], 'LOSS', note)
                             st.session_state[f"fail_{row['id']}"] = False
                             st.rerun()
-                else:
-                    st.write(f"Status: **{row['status']}**")
             st.markdown('</div>', unsafe_allow_html=True)
