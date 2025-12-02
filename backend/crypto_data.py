@@ -2,7 +2,8 @@ import ccxt
 import pandas as pd
 import pandas_ta as ta
 import numpy as np
-from backend.database import save_trade, get_history, update_outcome, update_outcome_and_learn, get_performance_stats
+# HANYA IMPORT YANG DIPAKAI AGAR BERSIH
+from backend.database import get_adaptive_rules
 
 # --- INTEGRASI MODUL EKSTERNAL ---
 try:
@@ -112,28 +113,25 @@ def calc_technical_indicators(df):
         return df
     except: return df
 
-# --- SCANNER V6.0 (UNBREAKABLE / NO-EMPTY RETURN) ---
+# --- SCANNER V6.0 (UNBREAKABLE) ---
 def scan_dynamic_market():
-    # DAFTAR DARURAT (Major Pairs)
     FALLBACK_COINS = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT']
     candidates = []
     
-    # 1. Coba Ambil Top Koin dari Binance
     try:
         exc = get_exchange()
         tickers = exc.fetch_tickers()
         valid_symbols = [s for s, d in tickers.items() if s.endswith('/USDT')]
-        candidates = sorted(valid_symbols, key=lambda x: tickers[x].get('quoteVolume', 0), reverse=True)[:50] # Kurangi jadi 50 biar cepat
+        candidates = sorted(valid_symbols, key=lambda x: tickers[x].get('quoteVolume', 0), reverse=True)[:50]
     except:
         print("⚠️ Koneksi Binance Bermasalah. Menggunakan Mode Darurat.")
         candidates = FALLBACK_COINS
 
     scored_candidates = []
     
-    # 2. Analisa Kandidat
     for sym in candidates:
         try:
-            df = fetch_market_data(sym, '1h', limit=200) # Limit kecil untuk scan cepat
+            df = fetch_market_data(sym, '1h', limit=200)
             df = calc_technical_indicators(df)
             if df is None or 'RSI' not in df.columns: continue
             
@@ -143,7 +141,6 @@ def scan_dynamic_market():
             score = 0
             bias = "NEUTRAL"
             
-            # Simple Scoring untuk Scanner
             if last['close'] > last.get('EMA_200', 0): score += 2
             else: score -= 2
             
@@ -159,19 +156,16 @@ def scan_dynamic_market():
         except:
             continue
             
-    # 3. KEPUTUSAN FINAL (TIDAK BOLEH KOSONG)
     if scored_candidates:
         return sorted(scored_candidates, key=lambda x: x['score'], reverse=True)[:3]
     else:
-        # Jika semua gagal (misal IP ke-ban atau internet down total),
-        # Kembalikan hardcoded list agar UI tidak crash dan User tau ada masalah koneksi.
         return [
-            {'symbol': 'BTC/USDT', 'bias': 'Cek Manual (Koneksi Error)', 'score': 0, 'poc': 0},
-            {'symbol': 'ETH/USDT', 'bias': 'Cek Manual (Koneksi Error)', 'score': 0, 'poc': 0},
-            {'symbol': 'SOL/USDT', 'bias': 'Cek Manual (Koneksi Error)', 'score': 0, 'poc': 0}
+            {'symbol': 'BTC/USDT', 'bias': 'Cek Manual', 'score': 0, 'poc': 0},
+            {'symbol': 'ETH/USDT', 'bias': 'Cek Manual', 'score': 0, 'poc': 0},
+            {'symbol': 'SOL/USDT', 'bias': 'Cek Manual', 'score': 0, 'poc': 0}
         ]
 
-# --- AI CONTEXT GENERATOR ---
+# --- AI CONTEXT GENERATOR (V6 - FIX MEMORI) ---
 def get_ai_context_indo(symbol, poc_val=0):
     df_chart = fetch_market_data(symbol, '1h', limit=1000)
     df_trend = fetch_market_data(symbol, '1d', limit=1000)
@@ -204,7 +198,11 @@ def get_ai_context_indo(symbol, poc_val=0):
     
     chart_data = df_chart.tail(24)[['open','high','low','close']].values.tolist()
     
+    # FIX: Memasukkan adaptive_rules ke dalam string context
     context = f"""
+    [ATURAN DARI PENGALAMAN (ADAPTIVE LEARNING)]:
+    {adaptive_rules if adaptive_rules else "Belum ada data pembelajaran. Analisa normal."}
+    
     [SOP ANALISA USER]:
     1. TREND (D1): Cek arah besar.
     2. STRUKTUR (H1): Support/Resist, Fibonacci, POC.

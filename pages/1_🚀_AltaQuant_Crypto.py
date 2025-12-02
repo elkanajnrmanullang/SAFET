@@ -3,12 +3,12 @@ import plotly.graph_objects as go
 import json
 import re
 import time
+import traceback
 from backend.crypto_data import get_ai_context_indo, scan_dynamic_market, get_market_overview
 from backend.ai_engine import get_gemini_analysis
-# FIX IMPORT: Menambahkan get_performance_stats agar tidak NameError
 from backend.database import save_trade, get_history, update_outcome, update_outcome_and_learn, get_performance_stats
 
-st.set_page_config(page_title="AltaQuant Pro V6.0", layout="wide")
+st.set_page_config(page_title="AltaQuant Pro V6.1", layout="wide")
 
 # --- CSS ---
 st.markdown("""
@@ -46,8 +46,8 @@ def parse_json(text):
     try:
         clean = re.sub(r'```json\s*|\s*```', '', text).strip()
         return json.loads(clean)
-    except:
-        return {"fundamental":"Gagal Parsing","teknikal":"Gagal Parsing","chart_pattern":"-","candle_pattern":"-","keputusan":"WAIT","entry":"-","sl":"-","tp1":"-","tp2":"-","alasan":text[:500]}
+    except Exception as e:
+        return {"fundamental": f"Gagal Parsing JSON: {str(e)}", "teknikal":"-", "keputusan":"WAIT", "entry":"-", "sl":"-", "tp1":"-", "tp2":"-", "alasan": text[:500]}
 
 def clean_text_output(data_input):
     if isinstance(data_input, dict):
@@ -117,7 +117,7 @@ def render_card(symbol, data, bias, extra_data):
 </div>
 <div style="text-align:right;">
 <span style="color:{theme}; font-weight:bold; font-size:1.2em; letter-spacing:1px;">BIAS: {bias}</span><br>
-<small style="color:#94a3b8; font-size:0.75em;">INSTITUTIONAL V6.0</small>
+<small style="color:#94a3b8; font-size:0.75em;">INSTITUTIONAL V6.1</small>
 </div>
 </div>
 <div class="grid-info">
@@ -160,7 +160,7 @@ with tab1:
         mode = st.radio("Mode Operasi", ["Manual Input", "Auto-Discovery"])
         sym_in = st.text_input("Simbol Aset", "BTC/USDT").upper() if mode == "Manual Input" else None
         st.markdown("---")
-        st.info("💡 **V6.0 Features:**\n- Scoreboard & Win Rate\n- Anti-Crash Scanner\n- SOP Top-Down Analysis")
+        st.info("💡 **V6.1 Features:**\n- DEBUG MODE ACTIVATED\n- Anti-Silent Crash\n- Real-time Error Log")
         btn = st.button("RUN ANALYSIS", type="primary")
 
     if 'results' not in st.session_state: st.session_state['results'] = []
@@ -170,11 +170,11 @@ with tab1:
         c1, c2 = st.columns(2)
         with c1: st.markdown(f'<div class="hero-metric"><div class="metric-lbl">BTC PRICE</div><div class="metric-val">${ov["btc_price"]:.2f}</div><div class="metric-lbl" style="color:{"#10b981" if ov["btc_change"]>0 else "#ef4444"}">{ov["btc_change"]:.2f}%</div></div>', unsafe_allow_html=True)
         with c2: st.markdown(f'<div class="hero-metric"><div class="metric-lbl">ETH PRICE</div><div class="metric-val">${ov["eth_price"]:.2f}</div><div class="metric-lbl" style="color:{"#10b981" if ov["eth_change"]>0 else "#ef4444"}">{ov["eth_change"]:.2f}%</div></div>', unsafe_allow_html=True)
-        st.info("👋 **Sistem Siap.** Tab Scoreboard sekarang aktif untuk memantau Win Rate Anda.")
+        st.info("👋 **Sistem Siap.**")
 
     if btn:
         st.session_state['results'] = []
-        with st.status("🔄 Menjalankan Analisa SOP Contextual...", expanded=True) as status:
+        with st.status("🔄 Menjalankan AltaQuant V6 Core...", expanded=True) as status:
             targets = []
             
             if mode == "Auto-Discovery":
@@ -182,7 +182,10 @@ with tab1:
                 try:
                     targets = scan_dynamic_market() 
                     if not targets: st.error("Fatal Error: Scanner gagal.")
-                except Exception as e: st.error(f"Scanner Error: {e}")
+                except Exception as e: 
+                    st.error(f"❌ Scanner Error: {e}")
+                    # EMERGENCY FALLBACK UI
+                    targets = [{'symbol': 'BTC/USDT', 'bias': 'EMERGENCY', 'poc': 0}]
             else:
                 targets = [{'symbol': sym_in, 'bias': 'MANUAL', 'poc': 0}]
 
@@ -194,52 +197,65 @@ with tab1:
                     poc_scan = t.get('poc', 0)
                     prog.progress((idx+1)*int(100/len(targets)))
                     
-                    status.write(f"Analisa {sym}: Mencari Konfirmasi Pola...")
+                    status.write(f"Analisa {sym}...")
                     
+                    # --- DEBUGGING BLOCK (INI KUNCI PERBAIKANNYA) ---
                     try:
+                        # 1. Fetch Data Backend
                         df, context, poc_final, extra_data = get_ai_context_indo(sym, poc_scan)
                         
-                        if df is not None:
-                            current_price = df['close'].iloc[-1]
+                        if df is None:
+                            st.error(f"❌ Data Gagal Diambil untuk {sym}. Cek Koneksi.")
+                            continue
                             
-                            prompt = f"""
-                            Role: Institutional Technical Analyst.
-                            Tugas: Analisa {sym} dengan SOP KONTEKSTUAL (Trend -> Pattern -> Candle).
-                            
-                            [DATA MARKET LENGKAP]:
-                            HARGA SEKARANG: {current_price}
-                            {context}
-                            
-                            INSTRUKSI BERPIKIR (SOP):
-                            1. **LIHAT GAMBAR BESAR (24H OHLC):**
-                               - Perhatikan data '24 CANDLE TERAKHIR'. Apakah membentuk pola? (Flag, Channel, Consolidation, Double Top/Bottom).
-                            
-                            2. **CARI KONFIRMASI CANDLE (TRIGGER):**
-                               - Apakah candle terakhir (atau 2 terakhir) memberikan sinyal yang SEJALAN dengan pola grafik tersebut?
-                            
-                            3. **KEPUTUSAN (MARKET ORDER):**
-                               - Jika ada pola yang terkonfirmasi, sikat (LONG/SHORT) di harga {current_price}.
-                               - Jika Auto-Discovery: WAJIB PILIH arah.
-                            
-                            OUTPUT JSON:
-                            - fundamental: Ringkasan fundamental singkat.
-                            - teknikal: Jelaskan hubungan antara CHART PATTERN (24h) dan CANDLE SIGNAL (Trigger). Kenapa valid?
-                            - chart_pattern: Pola grafik yang terlihat dari data 24 jam (misal: Sideways/Flag).
-                            - candle_pattern: Pola candle trigger (misal: Hammer).
-                            - keputusan: "LONG" atau "SHORT".
-                            - entry: "{current_price}".
-                            - sl: Angka Stop Loss (Logis sesuai pola).
-                            - tp1: Angka Target 1.
-                            - tp2: Angka Target 2.
-                            - alasan: Sintesa akhir kenapa setup ini layak dieksekusi.
-                            """
-                            
-                            raw = get_gemini_analysis(prompt)
-                            parsed = parse_json(raw)
-                            results.append({'symbol': sym, 'data': parsed, 'df': df, 'bias': t['bias'], 'poc': poc_final, 'extra': extra_data})
+                        current_price = df['close'].iloc[-1]
+                        
+                        # 2. Prompt AI
+                        prompt = f"""
+                        Role: Institutional Technical Analyst.
+                        Tugas: Analisa {sym} dengan SOP KONTEKSTUAL (Trend -> Pattern -> Candle).
+                        
+                        [DATA MARKET]:
+                        HARGA SEKARANG: {current_price}
+                        {context}
+                        
+                        INSTRUKSI BERPIKIR (SOP):
+                        1. **LIHAT GAMBAR BESAR (24H OHLC):**
+                           - Perhatikan data 'DATA CHART 24 JAM'. Apakah membentuk pola? (Flag, Channel, Consolidation).
+                        
+                        2. **CARI KONFIRMASI CANDLE:**
+                           - Apakah candle terakhir valid sebagai trigger?
+                        
+                        3. **KEPUTUSAN (MARKET ORDER):**
+                           - Sikat (LONG/SHORT) di harga {current_price}.
+                           - Jika Auto-Discovery: WAJIB PILIH arah.
+                        
+                        OUTPUT JSON:
+                        - fundamental: Ringkasan singkat.
+                        - teknikal: Analisa teknikal singkat.
+                        - chart_pattern: Pola grafik 24h.
+                        - candle_pattern: Pola candle trigger.
+                        - keputusan: "LONG" atau "SHORT".
+                        - entry: "{current_price}".
+                        - sl: Angka Stop Loss.
+                        - tp1: Angka Target 1.
+                        - tp2: Angka Target 2.
+                        - alasan: Sintesa akhir.
+                        """
+                        
+                        # 3. Call AI
+                        raw = get_gemini_analysis(prompt)
+                        
+                        # 4. Parse JSON
+                        parsed = parse_json(raw)
+                        
+                        # 5. Append Result
+                        results.append({'symbol': sym, 'data': parsed, 'df': df, 'bias': t['bias'], 'poc': poc_final, 'extra': extra_data})
                     
                     except Exception as e:
-                        print(f"Skip {sym}: {e}")
+                        # JIKA ERROR, TAMPILKAN DI LAYAR AGAR USER TAHU
+                        st.error(f"⚠️ Error pada {sym}: {str(e)}")
+                        print(f"DEBUG ERROR: {traceback.format_exc()}") # Print ke terminal juga
                         continue
                 
                 st.session_state['results'] = results
@@ -261,8 +277,6 @@ with tab1:
 with tab2:
     st.header("📊 Performance Dashboard")
     
-    # --- LIVE SCOREBOARD ---
-    # Fungsi ini sekarang aman dipanggil karena sudah diimport
     stats = get_performance_stats()
     
     m1, m2, m3, m4 = st.columns(4)
