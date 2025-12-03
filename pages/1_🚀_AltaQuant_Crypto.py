@@ -2,7 +2,6 @@ import streamlit as st
 import plotly.graph_objects as go
 import json
 import re
-import textwrap  # <--- SOLUSI INTI: Untuk membersihkan indentasi HTML
 from backend.crypto_data import get_ai_context_indo, scan_dynamic_market, get_market_overview
 from backend.ai_engine import get_gemini_analysis
 from backend.database import save_trade, get_history, update_outcome_and_learn, get_performance_stats
@@ -55,9 +54,10 @@ st.markdown("""
 
     .verdict-box { background: rgba(15, 23, 42, 0.6); border-left: 4px solid; padding: 15px; margin-top: 15px; font-style: italic; color: #e2e8f0; }
 
-    .tech-list { list-style: none; padding-left: 0; }
-    .tech-list li { margin-bottom: 8px; color: #cbd5e1; }
-    .tech-label { color: var(--primary); font-weight: bold; margin-right: 5px; }
+    .tech-section { background: rgba(0,0,0,0.2); padding: 15px; border-radius: 8px; margin-bottom: 15px; border: 1px solid rgba(255,255,255,0.05); }
+    .tech-title { color: var(--text-muted); font-size: 0.85rem; font-weight: bold; border-bottom: 1px solid var(--border); padding-bottom: 8px; margin-bottom: 10px; }
+    .tech-item { margin-bottom: 8px; font-size: 0.95rem; }
+    .tech-number { color: var(--primary); font-weight: bold; margin-right: 5px; }
     
     .metric-box { text-align: center; background: var(--bg-card); padding: 10px; border-radius: 8px; border: 1px solid var(--border); margin-bottom: 10px; }
     .metric-val { font-size: 1.5rem; font-weight: bold; color: white; }
@@ -83,7 +83,6 @@ def parse_indo_json(text):
         for key, val in data.items():
             if isinstance(val, str):
                 data[key] = clean_html_tags(val)
-                
         return data
     except:
         return {
@@ -117,60 +116,52 @@ def render_output_card(sym, data, mode):
         sl_box = "Invalidation: Candle Close < Support"
         tp_box = "Long Term Hold"
 
-    # --- PERBAIKAN UTAMA: textwrap.dedent ---
-    # Ini akan menghapus spasi indentasi di awal setiap baris string HTML
-    # sehingga Markdown tidak menganggapnya sebagai Code Block.
-    html = textwrap.dedent(f"""
-    <div class="output-container">
-        <div class="card-header {header_class}">
-            <div>
-                <h2 style="margin:0; font-size: 1.5rem; color:white !important;">{sym} 
-                    <span style="background:{badge_bg}; color:{'white' if mode=='Futures (Scalping)' else 'black'}; padding:2px 10px; border-radius:4px; font-size:0.6em; vertical-align:middle;">{action}</span>
-                </h2>
-                <small style="color:#94a3b8;">Mode: {mode}</small>
-            </div>
-            <div style="text-align:right;">
-                <div style="font-weight:bold; color:{badge_bg};">AI CONFIDENCE</div>
-                <small style="color:#aaa;">Hybrid Logic Verified</small>
-            </div>
+    html = f"""
+<div class="output-container">
+    <div class="card-header {header_class}">
+        <div>
+            <h2 style="margin:0; font-size: 1.5rem; color:white !important;">{sym} 
+                <span style="background:{badge_bg}; color:{'white' if mode=='Futures (Scalping)' else 'black'}; padding:2px 10px; border-radius:4px; font-size:0.6em; vertical-align:middle;">{action}</span>
+            </h2>
+            <small style="color:#94a3b8;">Mode: {mode}</small>
         </div>
-        
-        <div class="card-body">
-            <div class="grid-info">
-                <div class="info-box">
-                    <div class="info-label">Entry Zone</div>
-                    <div class="info-value">{entry_box}</div>
-                </div>
-                <div class="info-box" style="border-color: rgba(239, 68, 68, 0.3);">
-                    <div class="info-label">Stop Loss</div>
-                    <div class="info-value">{sl_box}</div>
-                </div>
-                <div class="info-box" style="border-color: rgba(16, 185, 129, 0.3);">
-                    <div class="info-label">Take Profit</div>
-                    <div class="info-value">{tp_box}</div>
-                </div>
-            </div>
-
-            <div style="margin-bottom:15px;">
-                <h4 style="color:#94a3b8; border-bottom:1px solid #334155; padding-bottom:5px;">Fundamental & Sentiment</h4>
-                <p style="color:#e2e8f0; font-size:0.95rem;">{data.get('fundamental', '-')}</p>
-            </div>
-
-            <div>
-                <h4 style="color:#94a3b8; border-bottom:1px solid #334155; padding-bottom:5px;">Technical Breakdown</h4>
-                <ul class="tech-list">
-                    <li><span class="tech-label">Chart Pattern:</span> {data.get('tek_chart', '-')}</li>
-                    <li><span class="tech-label">Candle Pattern:</span> {data.get('tek_candle', '-')}</li>
-                    <li><span class="tech-label">Indicators:</span> {data.get('tek_indikator', '-')}</li>
-                </ul>
-            </div>
-            
-            <div class="verdict-box" style="border-color: {verdict_color};">
-                <strong>🤖 AI Analysis:</strong> "{summary}"
-            </div>
+        <div style="text-align:right;">
+            <div style="font-weight:bold; color:{badge_bg};">AI CONFIDENCE</div>
+            <small style="color:#aaa;">Hybrid Logic Verified</small>
         </div>
     </div>
-    """)
+    <div class="card-body">
+        <div class="grid-info">
+            <div class="info-box">
+                <div class="info-label">Entry Zone</div>
+                <div class="info-value">{entry_box}</div>
+            </div>
+            <div class="info-box" style="border-color: rgba(239, 68, 68, 0.3);">
+                <div class="info-label">Stop Loss</div>
+                <div class="info-value">{sl_box}</div>
+            </div>
+            <div class="info-box" style="border-color: rgba(16, 185, 129, 0.3);">
+                <div class="info-label">Take Profit</div>
+                <div class="info-value">{tp_box}</div>
+            </div>
+        </div>
+        <div class="tech-section">
+            <div class="tech-title">FUNDAMENTAL</div>
+            <p style="color:#e2e8f0; font-size:0.95rem; margin:0;">{data.get('fundamental', '-')}</p>
+        </div>
+        <div class="tech-section">
+            <div class="tech-title">TEKNIKAL BREAKDOWN</div>
+            <div class="tech-item"><span class="tech-number">1. Indikator:</span> {data.get('tek_indikator', '-')}</div>
+            <div class="tech-item"><span class="tech-number">2. Candle Pattern:</span> {data.get('tek_candle', '-')}</div>
+            <div class="tech-item"><span class="tech-number">3. Chart Pattern:</span> {data.get('tek_chart', '-')}</div>
+            <div class="tech-item"><span class="tech-number">4. Teknikal Lainnya:</span> {data.get('tek_lain', '-')}</div>
+        </div>
+        <div class="verdict-box" style="border-color: {verdict_color};">
+            <strong>🤖 SUMMARY (AI Verdict):</strong> "{summary}"
+        </div>
+    </div>
+</div>
+"""
     return html
 
 # --- SIDEBAR ---
@@ -211,8 +202,6 @@ with tab1:
             else:
                 status.write("📡 Scanning Top 10 Volatile Assets & Filtering Top 5 Liquid...")
                 targets = scan_dynamic_market()
-                
-                # JIKA SCANNER GAGAL, BERITAHU USER ALASANNYA
                 if not targets:
                     status.warning("⚠️ Scanner tidak menemukan data. Menggunakan Default: BTC/ETH.")
                     targets = [{'symbol': 'BTC/USDT', 'bias': 'NEUTRAL'}, {'symbol': 'ETH/USDT', 'bias': 'NEUTRAL'}]
@@ -226,24 +215,47 @@ with tab1:
                 df, context, poc = get_ai_context_indo(sym)
                 
                 if df is not None:
-                    # PROMPT DESIGN v3.5 (No HTML in Output)
+                    # --- PROMPT STRATEGY V4.1 (VOTING SYSTEM) ---
                     if analysis_mode == "Futures (Scalping)":
                         strategy_prompt = """
-                        MODE: FUTURES (SCALPING/INTRADAY)
-                        PHASE 1 (TREND FILTER): Gunakan EMA 200 H1. Jika Harga < EMA 200, bias BEARISH. Jika Harga > EMA 200, bias BULLISH.
-                        PHASE 2 (STRICT ENTRY RULES): 
-                        - HANYA ENTRY JIKA: Breakout/Breakdown Chart Pattern DENGAN Candle Confirmation (Hammer/Engulfing).
-                        - ATAU: Bounce di Support/Resist/POC DENGAN Candle Confirmation.
-                        - Validasi: Divergence RSI.
-                        - JANGAN ENTRY jika harga di 'No Man's Land' (tengah-tengah).
-                        PHASE 3 (RISK): Risk:Reward min 1:2. SL di titik invalidasi.
+                        MODE: FUTURES (SCALPING/INTRADAY) - ALTAQUANT V4.0 PROTOCOL
+                        
+                        [ALGORITMA SKORING - VOTING SYSTEM]:
+                        Tugasmu adalah menghitung skor sinyal untuk menentukan keputusan. Jangan bias, ikuti matematika ini:
+                        
+                        1. IDENTIFIKASI SINYAL:
+                           - Trend (MA 7/25/99): Bullish/Bearish? (Sesuai?)
+                           - Momentum (RSI/MACD): Mendukung/Divergence? (Catatan: RSI Overbought di trend kuat BUKAN sinyal bearish, itu momentum valid).
+                           - Volume: Spike?
+                           - Pola (Candle/Chart): Ada?
+                           
+                        2. HITUNG VOTE:
+                           - Setiap indikator yang mendukung arah analisa = 1 VOTE VALID.
+                           - Setiap indikator yang berlawanan/melemahkan = 1 VOTE INVALID.
+                           
+                        3. KEPUTUSAN FINAL (LOGIKA MATEMATIKA):
+                           - Jika VOTE VALID > VOTE INVALID -> KEPUTUSAN: LONG/SHORT (Sesuai arah dominan).
+                           - Jika VOTE VALID == VOTE INVALID -> KEPUTUSAN: WAIT.
+                           - Jika VOTE VALID < VOTE INVALID -> KEPUTUSAN: WAIT (atau ikut arah lawan jika dominan).
+                        
+                        [CONTOH KASUS USER]:
+                        "Trend Naik (Valid), MACD Positif (Valid), Hammer (Valid). RSI Overbought (Invalid/Warning)."
+                        Hitungan: 3 Valid vs 1 Invalid.
+                        Keputusan: 3 > 1 -> LONG. (JANGAN WAIT).
+                        
+                        [RULE OF TWO - SYARAT MINIMUM]:
+                        Meskipun voting menang, tetap pastikan minimal ada 2 Indikator Valid dari keluarga berbeda (Rule of Two).
+                        
+                        [RISK MANAGEMENT]:
+                        - SL Wajib Struktural.
+                        - TP Minimal 1:2.
                         """
                     else:
                         strategy_prompt = """
                         MODE: SPOT (LONG TERM ACCUMULATION)
-                        PHASE 1 (MACRO): Fokus Trend Weekly/Daily.
-                        PHASE 2 (DISCOUNT): Entry saat RSI Oversold atau Support Kuat.
-                        PHASE 3 (EXECUTION): Dollar Cost Average (DCA).
+                        Strategi: Buy on Weakness.
+                        Trigger: Harga menyentuh MA 99 Daily atau RSI Weekly Oversold.
+                        Action: Dollar Cost Averaging (DCA).
                         """
 
                     prompt = f"""
@@ -254,18 +266,17 @@ with tab1:
                     {strategy_prompt}
                     
                     CRITICAL INSTRUCTION:
-                    - Keluaran WAJIB format JSON murni.
-                    - VALUENYA HARUS TEKS BIASA (PLAIN TEXT).
-                    - DILARANG KERAS menggunakan tag HTML (seperti <div>, <b>, <ul>) di dalam nilai JSON.
-                    - DILARANG menggunakan Markdown (seperti **bold**) di dalam nilai JSON.
+                    - Keluaran WAJIB format JSON murni (Plain Text).
+                    - DILARANG menggunakan Markdown/HTML dalam value JSON.
                     
                     OUTPUT FORMAT (STRICT JSON):
                     {{
-                        "fundamental": "Analisa singkat (Plain Text)...",
-                        "tek_indikator": "Status RSI/MACD/EMA (Plain Text)...",
-                        "tek_chart": "Nama Pola Chart (Plain Text)...",
-                        "tek_candle": "Nama Pola Candle (Plain Text)...",
-                        "summary": "Kesimpulan Naratif AI (Plain Text)...",
+                        "fundamental": "Analisa fundamental singkat...",
+                        "tek_indikator": "Hasil analisa MA, BB, RSI, Volume...",
+                        "tek_candle": "Hasil analisa candle pattern (Math/Vision)...",
+                        "tek_chart": "Hasil analisa chart pattern (Vision)...",
+                        "tek_lain": "Fibs, Support/Resist...",
+                        "summary": "Kesimpulan Naratif AI...",
                         "keputusan": "LONG/SHORT/WAIT",
                         "entry": "Angka/Range",
                         "sl": "Angka", 
@@ -288,8 +299,8 @@ with tab1:
     for res in st.session_state['results']:
         sym = res['symbol']
         st.plotly_chart(plot_tv_chart(res['df'], sym), use_container_width=True)
-        # Gunakan unsafe_allow_html=True agar div/style dirender browser
-        st.markdown(render_output_card(sym, res['data'], res['mode']), unsafe_allow_html=True)
+        html_card = render_output_card(sym, res['data'], res['mode'])
+        st.markdown(html_card, unsafe_allow_html=True)
         
         c_btn, _ = st.columns([1, 4])
         with c_btn:
@@ -311,7 +322,11 @@ with tab2:
         </div>
         """, unsafe_allow_html=True)
         
+        if 'feedback_mode' not in st.session_state:
+            st.session_state['feedback_mode'] = {}
+
         for row in history:
+            trade_id = row['id']
             with st.expander(f"{row['symbol']} - {row['action']} ({row['status']})"):
                 st.write(f"**Reason:** {row['reason']}")
                 st.write(f"**Setup:** Entry {row['entry']} | SL {row['sl']} | TP {row['tp']}")
@@ -319,15 +334,37 @@ with tab2:
                 
                 if row['status'] == 'OPEN':
                     st.markdown("---")
-                    c1, c2 = st.columns(2)
-                    if c1.button("✅ WIN", key=f"w_{row['id']}"):
-                        note = st.text_input("Feedback Positif:", "Setup Valid", key=f"nw_{row['id']}")
-                        if st.button("Confirm Win", key=f"cw_{row['id']}"):
-                            update_outcome_and_learn(row['id'], 'WIN', note)
-                            st.rerun()
                     
-                    if c2.button("❌ LOSS", key=f"l_{row['id']}"):
-                        note = st.text_input("Feedback Negatif:", "Kena SL", key=f"nl_{row['id']}")
-                        if st.button("Confirm Loss", key=f"cl_{row['id']}"):
-                            update_outcome_and_learn(row['id'], 'LOSS', note)
+                    current_feedback = st.session_state['feedback_mode'].get(trade_id)
+                    
+                    if current_feedback is None:
+                        c1, c2 = st.columns(2)
+                        if c1.button("✅ WIN", key=f"btn_w_{trade_id}"):
+                            st.session_state['feedback_mode'][trade_id] = 'WIN'
+                            st.rerun()
+                        
+                        if c2.button("❌ LOSS", key=f"btn_l_{trade_id}"):
+                            st.session_state['feedback_mode'][trade_id] = 'LOSS'
+                            st.rerun()
+                            
+                    else:
+                        feedback_type = current_feedback
+                        st.info(f"Adding Feedback for: {feedback_type}")
+                        
+                        note_input = st.text_input(
+                            f"Apa penyebab {feedback_type}?", 
+                            "Setup Sesuai Analisa" if feedback_type == 'WIN' else "Kena SL / Invalidasi",
+                            key=f"input_{trade_id}"
+                        )
+                        
+                        c_confirm, c_cancel = st.columns([1, 1])
+                        
+                        if c_confirm.button(f"Confirm {feedback_type}", type="primary", key=f"conf_{trade_id}"):
+                            update_outcome_and_learn(trade_id, feedback_type, note_input)
+                            del st.session_state['feedback_mode'][trade_id]
+                            st.success("Learning Saved!")
+                            st.rerun()
+                            
+                        if c_cancel.button("Cancel", key=f"canc_{trade_id}"):
+                            del st.session_state['feedback_mode'][trade_id]
                             st.rerun()

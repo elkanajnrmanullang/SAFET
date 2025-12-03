@@ -7,7 +7,6 @@ from backend.vision_pattern import detect_all_patterns
 
 # --- KONEKSI ---
 def get_exchange():
-    # Menggunakan opsi 'future' agar sesuai dengan data Binance Futures
     return ccxt.binance({
         'enableRateLimit': True, 
         'options': {'defaultType': 'future'}
@@ -41,34 +40,47 @@ def calc_volume_profile(df, bins=100):
         return (price_range[np.argmax(vol_profile)] + price_range[np.argmax(vol_profile)+1]) / 2
     except: return df['close'].iloc[-1]
 
-# --- INDIKATOR LENGKAP v3.3 ---
+# --- INDIKATOR LENGKAP v4.0 (Binance Standard) ---
 def calc_technical_indicators(df):
     if df is None or df.empty: return None
     try:
-        # 1. TREND
-        df['EMA_50'] = df.ta.ema(length=50)
-        df['EMA_200'] = df.ta.ema(length=200)
+        # 1. TREND (Binance Triple MA)
+        df['MA_7'] = df.ta.sma(length=7)
+        df['MA_25'] = df.ta.sma(length=25)
+        df['MA_99'] = df.ta.sma(length=99)
         
-        # 2. MOMENTUM
+        # 2. VOLATILITY (Bollinger Bands)
+        bb = df.ta.bbands(length=20, std=2)
+        if bb is not None:
+            df['BB_Upper'] = bb.iloc[:, 0] # BBL
+            df['BB_Mid'] = bb.iloc[:, 1]   # BBM
+            df['BB_Lower'] = bb.iloc[:, 2] # BBU (urutan pandas_ta: Lower, Mid, Upper biasanya, cek nama kolom)
+            # Koreksi: pandas_ta bbands returns columns like BBL_20_2.0, BBM_20_2.0, BBU_20_2.0
+            # Kita ambil berdasarkan urutan kolom standar pandas_ta: Lower, Mid, Upper, Bandwidth, Percent
+            df['BB_Lower'] = bb.iloc[:, 0]
+            df['BB_Mid'] = bb.iloc[:, 1]
+            df['BB_Upper'] = bb.iloc[:, 2]
+
+        # 3. MOMENTUM
         df['RSI'] = df.ta.rsi(length=14)
         
-        # 3. STOCH RSI
+        # 4. STOCH RSI
         stoch = df.ta.stochrsi(length=14, rsi_length=14, k=3, d=3)
         if stoch is not None:
             df['Stoch_K'] = stoch.iloc[:, 0]
             df['Stoch_D'] = stoch.iloc[:, 1]
 
-        # 4. MACD
+        # 5. MACD
         macd = df.ta.macd(fast=12, slow=26, signal=9)
         if macd is not None:
             df['MACD'] = macd.iloc[:, 0]
             df['MACD_Hist'] = macd.iloc[:, 1]
         
-        # 5. VOLATILITY
+        # 6. VOLUME & VOLATILITY
         df['ATR'] = df.ta.atr(length=14)
         df['Vol_SMA'] = df['volume'].rolling(20).mean()
         
-        # 6. AUTO FIBONACCI
+        # 7. AUTO FIBONACCI
         recent_high = df['high'].rolling(100).max()
         recent_low = df['low'].rolling(100).min()
         df['Fib_0'] = recent_low
@@ -77,7 +89,7 @@ def calc_technical_indicators(df):
         df['Fib_0.618'] = recent_high - (diff * 0.618)
         df['Fib_0.5'] = recent_high - (diff * 0.5)
 
-        # 7. CANDLE PATTERN
+        # 8. CANDLE PATTERN (Math Logic)
         hammer_pat = df.ta.cdl_pattern(name="hammer")
         engulf_pat = df.ta.cdl_pattern(name="engulfing")
         
@@ -92,70 +104,40 @@ def calc_technical_indicators(df):
         print(f"Err Indikator: {e}")
         return df
 
-# --- SCANNER FIXED (Top 10 Gainers/Losers -> 5 Best Liquid) ---
+# --- SCANNER (Tetap sama, sesuai dokumen Market Screening) ---
 def scan_dynamic_market():
-    """
-    1. Ambil semua ticker Futures.
-    2. Filter symbol yang valid (USDT pair).
-    3. Urutkan berdasarkan ABSOLUTE % CHANGE (Mencari Top Gainers & Top Losers).
-    4. Ambil Top 10 paling bergerak.
-    5. Dari 10 itu, ambil 5 dengan Volume (Quote USDT) terbesar.
-    """
     try:
         exc = get_exchange()
         tickers = exc.fetch_tickers()
-        
         candidates = []
-        
         for symbol, data in tickers.items():
-            # Filter hanya pair USDT dan hindari pair aneh (seperti index leverage)
             if '/USDT' in symbol and 'UP/' not in symbol and 'DOWN/' not in symbol:
-                
-                # Handle data None/Kosong dengan aman
                 change_pct = data.get('percentage')
                 if change_pct is None: change_pct = 0.0
-                
-                # Gunakan quoteVolume (Volume dalam USDT) jika ada, jika tidak pakai baseVolume * price
                 vol_usdt = data.get('quoteVolume')
                 if vol_usdt is None:
                     vol_usdt = (data.get('baseVolume') or 0) * (data.get('last') or 0)
-                
-                # Filter koin dengan volume terlalu kecil (misal di bawah $10jt) agar tidak terjebak koin gorengan
                 if vol_usdt > 10_000_000: 
                     candidates.append({
                         'symbol': symbol,
                         'change': float(change_pct),
-                        'abs_change': abs(float(change_pct)), # Mutlak agar minus besar juga masuk
+                        'abs_change': abs(float(change_pct)), 
                         'volume': float(vol_usdt)
                     })
-        
-        # TAHAP 1: Ambil 10 Koin dengan Pergerakan Terbesar (Top Volatility)
-        # Sort desc berdasarkan abs_change
         top_10_volatile = sorted(candidates, key=lambda x: x['abs_change'], reverse=True)[:10]
-        
-        # TAHAP 2: Dari 10 itu, pilih 5 yang paling Likuid (Volume Terbesar)
-        # Sort desc berdasarkan volume
         best_5_liquid = sorted(top_10_volatile, key=lambda x: x['volume'], reverse=True)[:5]
         
         final_picks = []
         for item in best_5_liquid:
             bias = "LONG (PUMP)" if item['change'] > 0 else "SHORT (DUMP)"
-            final_picks.append({
-                'symbol': item['symbol'], 
-                'bias': bias, 
-                'score': item['change']
-            })
-            
-        print(f"Scanner Result: {[x['symbol'] for x in final_picks]}") # Debug log di terminal
+            final_picks.append({'symbol': item['symbol'], 'bias': bias, 'score': item['change']})
         return final_picks
-
     except Exception as e:
         print(f"Scanner Error: {e}")
         return []
 
-# --- AI BRAIN & CONTEXT ---
+# --- AI BRAIN & CONTEXT v4.0 ---
 def get_ai_context_indo(symbol, poc_val=0):
-    # Gunakan fungsi yang sudah ada
     df_chart = fetch_market_data(symbol, '1h', limit=300)
     df_trend = fetch_market_data(symbol, '1d', limit=300)
     
@@ -169,8 +151,10 @@ def get_ai_context_indo(symbol, poc_val=0):
     l_1h = df_chart.iloc[-1]
     l_1d = df_trend.iloc[-1]
     
+    # Deteksi Pola Visual (Roboflow)
     vis_chart, vis_candle = detect_all_patterns(df_chart)
     
+    # Deteksi Pola Math
     math_candle = "Normal"
     if l_1h.get('Hammer', 0) != 0: math_candle = "Hammer"
     elif l_1h.get('Engulfing', 0) != 0: math_candle = "Engulfing"
@@ -180,32 +164,43 @@ def get_ai_context_indo(symbol, poc_val=0):
     if 'Fib_0.618' in l_1h and abs(price - l_1h['Fib_0.618']) / price < 0.005: 
         fib_status = "Rejection di Golden Ratio 0.618"
     
+    # Cek Volume Spike
+    vol_status = "Normal"
+    if l_1h['volume'] > (l_1h.get('Vol_SMA', 0) * 2):
+        vol_status = "SPIKE DETECTED (>2x MA20)"
+
     adaptive_rules = get_adaptive_rules()
     
     context = f"""
     [HISTORY PEMBELAJARAN]:
     {adaptive_rules if adaptive_rules else "Belum ada history."}
     
-    [ANALISA VISUAL (MATA)]:
-    - Chart Pattern: {vis_chart}
-    - Candle Pattern: {vis_candle}
+    [ANALISA VISUAL (MATA AI)]:
+    - Chart Pattern (Roboflow): {vis_chart}
+    - Candle Pattern (Roboflow): {vis_candle}
     
-    [DATA TEKNIKAL (LOGIKA)]:
-    - Harga: {price}
-    - Trend D1: {'BULLISH' if 'EMA_200' in l_1d and l_1d['close'] > l_1d['EMA_200'] else 'BEARISH'}
-    - EMA 200 H1: {l_1h.get('EMA_200', 0):.2f}
-    - Candle Math: {math_candle}
+    [DATA TEKNIKAL (LOGIKA MATH)]:
+    - Harga Saat Ini: {price}
+    - Trend MA (Binance Style):
+      * MA 7: {l_1h.get('MA_7', 0):.2f}
+      * MA 25: {l_1h.get('MA_25', 0):.2f}
+      * MA 99: {l_1h.get('MA_99', 0):.2f}
+    - Bollinger Bands (20, 2):
+      * Upper: {l_1h.get('BB_Upper', 0):.2f}
+      * Lower: {l_1h.get('BB_Lower', 0):.2f}
+    - Candle Math Pattern: {math_candle}
     
-    [INDIKATOR]:
+    [INDIKATOR MOMENTUM]:
     - RSI (14): {l_1h.get('RSI', 50):.2f}
     - StochRSI: K={l_1h.get('Stoch_K', 0):.2f} / D={l_1h.get('Stoch_D', 0):.2f}
     - MACD Hist: {l_1h.get('MACD_Hist', 0):.4f}
+    - Volume Status: {vol_status}
     
     [LAINNYA]:
-    - POC: {poc_val:.2f}
-    - Fibs: {fib_status}
+    - POC (Volume Profile): {poc_val:.2f}
+    - Fibs Status: {fib_status} (Fib 0.618: {l_1h.get('Fib_0.618', 0):.2f})
     
-    [OHLC TERAKHIR]:
+    [OHLC TERAKHIR (5 Candle)]:
     {df_chart.tail(5)[['open','high','low','close']].values.tolist()}
     """
     return df_chart, context, poc_val
