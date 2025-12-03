@@ -2,8 +2,7 @@ import streamlit as st
 
 st.set_page_config(
     page_title="AltaQuant Decision Engine", 
-    layout="wide", 
-    page_icon="🏰",
+    layout="wide",
     initial_sidebar_state="expanded"
 )
 
@@ -80,7 +79,7 @@ c1, c2 = st.columns(2)
 with c1:
     st.markdown("""
     <div class="nav-card">
-        <div class="nav-title">🚀 AltaQuant (Crypto)</div>
+        <div class="nav-title">AltaQuant by Altavara</div>
         <div class="nav-desc">
             <ul>
                 <li><strong>Fokus:</strong> Scalping (Futures) & Accumulation (Spot).</li>
