@@ -10,6 +10,7 @@ load_dotenv()
 API_KEY_CHART = os.getenv("ROBOFLOW_API_KEY_CHART")
 API_KEY_CANDLE = os.getenv("ROBOFLOW_API_KEY_CANDLE")
 
+# Model ID
 MODEL_CHART_ID = "chart-pattern/2"
 MODEL_CANDLE_ID = "candlestick-pattern-recognition/2"
 
@@ -20,10 +21,11 @@ def dataframe_to_image(df, filename="temp_vision.jpg"):
         subset = df.tail(50).copy()
         s = mpf.make_mpf_style(base_mpf_style='yahoo', rc={'font.size': 8})
         
-        # Simpan gambar "Clean" (Candle + Volume, No Axis) sesuai Dokumen v4.1
+        # Simpan gambar "Clean" (Candle + Volume, No Axis) sesuai Dokumen v4.1/v4.3
+        # Volume diaktifkan agar Vision AI bisa melihat konfirmasi volume spike
         mpf.plot(subset, type='candle', style=s, 
                  savefig=dict(fname=filename, dpi=100),
-                 axisoff=True, volume=True) # Volume diaktifkan
+                 axisoff=True, volume=True) 
         return True
     except Exception as e:
         print(f"Error Gen Image: {e}")

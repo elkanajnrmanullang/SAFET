@@ -215,36 +215,33 @@ with tab1:
                 df, context, poc = get_ai_context_indo(sym)
                 
                 if df is not None:
-                    # --- PROMPT STRATEGY V4.1 (VOTING SYSTEM) ---
+                    # --- PROMPT STRATEGY V4.3 (ALTAQUANT PROTOCOL) ---
                     if analysis_mode == "Futures (Scalping)":
                         strategy_prompt = """
-                        MODE: FUTURES (SCALPING/INTRADAY) - ALTAQUANT V4.0 PROTOCOL
+                        MODE: FUTURES (SCALPING/INTRADAY) - ALTAQUANT V4.3 PROTOCOL
                         
-                        [ALGORITMA SKORING - VOTING SYSTEM]:
-                        Tugasmu adalah menghitung skor sinyal untuk menentukan keputusan. Jangan bias, ikuti matematika ini:
+                        [INSTRUKSI UTAMA]:
+                        Tugasmu adalah menganalisa pasar dengan "Rule of Two" (Keseimbangan Indikator).
+                        JANGAN GUNAKAN SKOR PERSENTASE. Gunakan logika Valid/Invalid dengan penjelasan detail.
                         
-                        1. IDENTIFIKASI SINYAL:
-                           - Trend (MA 7/25/99): Bullish/Bearish? (Sesuai?)
-                           - Momentum (RSI/MACD): Mendukung/Divergence? (Catatan: RSI Overbought di trend kuat BUKAN sinyal bearish, itu momentum valid).
-                           - Volume: Spike?
-                           - Pola (Candle/Chart): Ada?
+                        1. INDIKATOR & TREND (VALID KARENA...):
+                           - Wajib jelaskan Validitas masing-masing indikator.
+                           - Contoh: "RSI: Valid (KARENA terjadi divergence positif di area oversold)."
+                           - Contoh: "Volume: Invalid (KARENA tidak ada spike signifikan)."
+                           - Cek Rule of Two: Minimal 2 indikator keluarga berbeda valid?
                            
-                        2. HITUNG VOTE:
-                           - Setiap indikator yang mendukung arah analisa = 1 VOTE VALID.
-                           - Setiap indikator yang berlawanan/melemahkan = 1 VOTE INVALID.
+                        2. CANDLE PATTERN (ISOLATED & CONFIRMED LOGIC):
+                           - Pola candle adalah KONFIRMASI TAMBAHAN.
+                           - Cek di data OHLC Terakhir: Jika pola terjadi pada candle terakhir (Closing), perhatikan apakah arahnya mendukung Trend.
+                           - Aturan Konfirmasi: Jika pola Reversal muncul tapi candle selanjutnya (di masa depan) belum ada, tandai sebagai "Menunggu Konfirmasi".
+                           - Jangan biarkan pola candle membatalkan sinyal Trend/Indikator yang kuat.
                            
-                        3. KEPUTUSAN FINAL (LOGIKA MATEMATIKA):
-                           - Jika VOTE VALID > VOTE INVALID -> KEPUTUSAN: LONG/SHORT (Sesuai arah dominan).
-                           - Jika VOTE VALID == VOTE INVALID -> KEPUTUSAN: WAIT.
-                           - Jika VOTE VALID < VOTE INVALID -> KEPUTUSAN: WAIT (atau ikut arah lawan jika dominan).
-                        
-                        [CONTOH KASUS USER]:
-                        "Trend Naik (Valid), MACD Positif (Valid), Hammer (Valid). RSI Overbought (Invalid/Warning)."
-                        Hitungan: 3 Valid vs 1 Invalid.
-                        Keputusan: 3 > 1 -> LONG. (JANGAN WAIT).
-                        
-                        [RULE OF TWO - SYARAT MINIMUM]:
-                        Meskipun voting menang, tetap pastikan minimal ada 2 Indikator Valid dari keluarga berbeda (Rule of Two).
+                        3. CHART PATTERN (HYBRID):
+                           - Prioritaskan hasil Vision AI. Jika Vision AI "Tidak Terdeteksi", gunakan hasil Math Fallback.
+                           
+                        4. KEPUTUSAN FINAL:
+                           - Jika Trend Valid + minimal 1 Indikator Momentum Valid -> LONG/SHORT.
+                           - Jika Indikator bertentangan (50:50) -> WAIT.
                         
                         [RISK MANAGEMENT]:
                         - SL Wajib Struktural.
@@ -268,13 +265,14 @@ with tab1:
                     CRITICAL INSTRUCTION:
                     - Keluaran WAJIB format JSON murni (Plain Text).
                     - DILARANG menggunakan Markdown/HTML dalam value JSON.
+                    - Pada bagian 'tek_indikator' dan 'tek_candle', WAJIB sertakan alasan (Valid/Invalid KARENA...).
                     
                     OUTPUT FORMAT (STRICT JSON):
                     {{
                         "fundamental": "Analisa fundamental singkat...",
-                        "tek_indikator": "Hasil analisa MA, BB, RSI, Volume...",
-                        "tek_candle": "Hasil analisa candle pattern (Math/Vision)...",
-                        "tek_chart": "Hasil analisa chart pattern (Vision)...",
+                        "tek_indikator": "Detail Validitas Indikator (RSI, MA, Vol)...",
+                        "tek_candle": "Detail Validitas Candle (Confirmed/Unconfirmed)...",
+                        "tek_chart": "Detail Validitas Chart Pattern...",
                         "tek_lain": "Fibs, Support/Resist...",
                         "summary": "Kesimpulan Naratif AI...",
                         "keputusan": "LONG/SHORT/WAIT",

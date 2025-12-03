@@ -40,7 +40,7 @@ def calc_volume_profile(df, bins=100):
         return (price_range[np.argmax(vol_profile)] + price_range[np.argmax(vol_profile)+1]) / 2
     except: return df['close'].iloc[-1]
 
-# --- INDIKATOR LENGKAP v4.0 (Binance Standard) ---
+# --- INDIKATOR LENGKAP v4.3 (Binance Std + Isolated Candle) ---
 def calc_technical_indicators(df):
     if df is None or df.empty: return None
     try:
@@ -52,11 +52,8 @@ def calc_technical_indicators(df):
         # 2. VOLATILITY (Bollinger Bands)
         bb = df.ta.bbands(length=20, std=2)
         if bb is not None:
-            df['BB_Upper'] = bb.iloc[:, 0] # BBL
-            df['BB_Mid'] = bb.iloc[:, 1]   # BBM
-            df['BB_Lower'] = bb.iloc[:, 2] # BBU (urutan pandas_ta: Lower, Mid, Upper biasanya, cek nama kolom)
-            # Koreksi: pandas_ta bbands returns columns like BBL_20_2.0, BBM_20_2.0, BBU_20_2.0
-            # Kita ambil berdasarkan urutan kolom standar pandas_ta: Lower, Mid, Upper, Bandwidth, Percent
+            # Urutan kolom pandas_ta: Lower, Mid, Upper, Bandwidth, Percent
+            # Kita ambil Lower (0), Mid (1), Upper (2)
             df['BB_Lower'] = bb.iloc[:, 0]
             df['BB_Mid'] = bb.iloc[:, 1]
             df['BB_Upper'] = bb.iloc[:, 2]
@@ -89,22 +86,52 @@ def calc_technical_indicators(df):
         df['Fib_0.618'] = recent_high - (diff * 0.618)
         df['Fib_0.5'] = recent_high - (diff * 0.5)
 
-        # 8. CANDLE PATTERN (Math Logic)
-        hammer_pat = df.ta.cdl_pattern(name="hammer")
-        engulf_pat = df.ta.cdl_pattern(name="engulfing")
-        
-        if hammer_pat is not None: df['Hammer'] = hammer_pat.iloc[:, 0]
-        else: df['Hammer'] = 0
-            
-        if engulf_pat is not None: df['Engulfing'] = engulf_pat.iloc[:, 0]
-        else: df['Engulfing'] = 0
+        # 8. CANDLE PATTERN (ISOLATED MODULE - Expanded)
+        # Menghitung banyak pola sekaligus tanpa mengganggu indikator lain
+        # Menggunakan 'try-except' internal agar jika satu pola gagal, yang lain tetap jalan
+        try:
+            patterns = df.ta.cdl_pattern(name=["doji", "hammer", "engulfing", "shootingstar", "morningstar", "eveningstar"])
+            if patterns is not None:
+                # Menggabungkan hasil pattern ke dataframe utama
+                df = pd.concat([df, patterns], axis=1)
+        except Exception as e_pat:
+            print(f"Candle Pattern Error: {e_pat}")
         
         return df
     except Exception as e:
         print(f"Err Indikator: {e}")
         return df
 
-# --- SCANNER (Tetap sama, sesuai dokumen Market Screening) ---
+# --- MATH FALLBACK FOR CHART PATTERN (v4.3) ---
+def detect_math_structure(df):
+    """
+    Logika Matematika sederhana untuk mendeteksi struktur harga
+    jika Vision AI gagal mendeteksi pola.
+    """
+    try:
+        # Ambil 50 candle terakhir untuk analisa struktur
+        subset = df.tail(50)
+        highs = subset['high'].values
+        lows = subset['low'].values
+        
+        # Cek Higher Highs & Higher Lows (Uptrend Structure)
+        hh = highs[-1] > highs[-10] and highs[-10] > highs[-20]
+        hl = lows[-1] > lows[-10] and lows[-10] > lows[-20]
+        
+        # Cek Lower Lows & Lower Highs (Downtrend Structure)
+        ll = lows[-1] < lows[-10] and lows[-10] < lows[-20]
+        lh = highs[-1] < highs[-10] and highs[-10] < highs[-20]
+        
+        if hh and hl: return "Math: Strong Uptrend Structure (Higher Highs/Lows)"
+        if ll and lh: return "Math: Strong Downtrend Structure (Lower Highs/Lows)"
+        if hh and ll: return "Math: Expanding / Volatile Structure"
+        if lh and hl: return "Math: Consolidating / Triangle Structure"
+        
+        return "Math: Sideways / No Clear Structure"
+    except:
+        return "Math: Calculation Error"
+
+# --- SCANNER ---
 def scan_dynamic_market():
     try:
         exc = get_exchange()
@@ -136,7 +163,7 @@ def scan_dynamic_market():
         print(f"Scanner Error: {e}")
         return []
 
-# --- AI BRAIN & CONTEXT v4.0 ---
+# --- AI BRAIN & CONTEXT v4.3 ---
 def get_ai_context_indo(symbol, poc_val=0):
     df_chart = fetch_market_data(symbol, '1h', limit=300)
     df_trend = fetch_market_data(symbol, '1d', limit=300)
@@ -151,13 +178,36 @@ def get_ai_context_indo(symbol, poc_val=0):
     l_1h = df_chart.iloc[-1]
     l_1d = df_trend.iloc[-1]
     
-    # Deteksi Pola Visual (Roboflow)
+    # 1. VISUAL INTELLIGENCE (Vision AI)
     vis_chart, vis_candle = detect_all_patterns(df_chart)
     
-    # Deteksi Pola Math
-    math_candle = "Normal"
-    if l_1h.get('Hammer', 0) != 0: math_candle = "Hammer"
-    elif l_1h.get('Engulfing', 0) != 0: math_candle = "Engulfing"
+    # 2. MATH FALLBACK (Chart Pattern Logic)
+    # Jika Vision AI gagal ("Tidak terdeteksi" atau list kosong), gunakan Math Logic
+    math_structure = detect_math_structure(df_chart)
+    if not vis_chart or "Tidak terdeteksi" in vis_chart:
+        chart_context = f"Vision: Tidak Terdeteksi | Math Fallback: {math_structure}"
+    else:
+        chart_context = f"Vision AI: {vis_chart} | Math Support: {math_structure}"
+
+    # 3. CANDLE PATTERN LOGIC (Expanded & Isolated)
+    detected_candles = []
+    # Mapping nama kolom pandas_ta ke nama yang mudah dibaca
+    # Nama kolom biasanya format CDL_NAMAPOLA_...
+    cols_check = {
+        'CDL_DOJI_10_0.1': 'Doji',
+        'CDL_HAMMER': 'Hammer',
+        'CDL_ENGULFING': 'Engulfing',
+        'CDL_SHOOTINGSTAR': 'Shooting Star',
+        'CDL_MORNINGSTAR': 'Morning Star',
+        'CDL_EVENINGSTAR': 'Evening Star'
+    }
+    
+    for col, name in cols_check.items():
+        # Cek jika kolom ada dan nilainya tidak 0
+        if col in l_1h and l_1h[col] != 0:
+            detected_candles.append(name)
+            
+    math_candle_str = ", ".join(detected_candles) if detected_candles else "Normal / No Pattern"
     
     fib_status = "Netral"
     price = l_1h['close']
@@ -175,9 +225,9 @@ def get_ai_context_indo(symbol, poc_val=0):
     [HISTORY PEMBELAJARAN]:
     {adaptive_rules if adaptive_rules else "Belum ada history."}
     
-    [ANALISA VISUAL (MATA AI)]:
-    - Chart Pattern (Roboflow): {vis_chart}
-    - Candle Pattern (Roboflow): {vis_candle}
+    [ANALISA VISUAL & STRUKTUR]:
+    - Chart Pattern (Hybrid): {chart_context}
+    - Candle Pattern (Vision AI): {vis_candle}
     
     [DATA TEKNIKAL (LOGIKA MATH)]:
     - Harga Saat Ini: {price}
@@ -188,7 +238,9 @@ def get_ai_context_indo(symbol, poc_val=0):
     - Bollinger Bands (20, 2):
       * Upper: {l_1h.get('BB_Upper', 0):.2f}
       * Lower: {l_1h.get('BB_Lower', 0):.2f}
-    - Candle Math Pattern: {math_candle}
+    
+    [CANDLE PATTERN DETECTOR (MATH)]:
+    - Detected: {math_candle_str}
     
     [INDIKATOR MOMENTUM]:
     - RSI (14): {l_1h.get('RSI', 50):.2f}
