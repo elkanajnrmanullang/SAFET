@@ -2,168 +2,200 @@ import streamlit as st
 import plotly.graph_objects as go
 import json
 import re
-# Import Layer Hybrid
-from backend.crypto_data import get_ai_context_indo, scan_dynamic_market, get_market_overview
-from backend.ai_engine import layer1_sentiment_analysis, layer2_technical_screen, layer3_final_decision
-from backend.database import save_trade, get_history, update_outcome_and_learn, get_performance_stats
 
-st.set_page_config(page_title="AltaQuant Pro", layout="wide")
+# =============================
+# BACKEND IMPORT
+# =============================
+from backend.crypto_data import build_ai_context
+from backend.ai_engine import final_decision
 
-# CSS Styling (Tetap sama, hanya tambah style table kecil)
+# ❌ DEPRECATED / NOT USED (kept as comment)
+# from backend.fundamental import analyze_fundamental
+# from backend.ai_engine import run_ai_pipeline
+
+from backend.news import get_crypto_news
+
+# =============================
+# PAGE CONFIG
+# =============================
+st.set_page_config(
+    page_title="AltaQuant Pro",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# =============================
+# GLOBAL STYLE
+# =============================
 st.markdown("""
 <style>
-    :root { --primary: #6366f1; --secondary: #10b981; --accent: #f59e0b; --danger: #ef4444; --bg-card: #1e293b; --text-main: #f8fafc; --text-muted: #94a3b8; --border: #334155; --futures-color: #f43f5e; }
-    .output-container { border: 1px solid var(--border); border-radius: 12px; overflow: hidden; margin-bottom: 20px; background: var(--bg-card); }
-    .card-header { padding: 15px 25px; display: flex; justify-content: space-between; border-bottom: 1px solid; }
-    .futures-header { background: linear-gradient(90deg, rgba(244, 63, 94, 0.2), transparent); border-bottom-color: var(--futures-color); }
-    .card-body { padding: 25px; }
-    .grid-info { display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px; margin-bottom: 20px; }
-    .info-box { background: rgba(0,0,0,0.3); padding: 15px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.05); }
-    .info-label { font-size: 0.75rem; color: var(--text-muted); font-weight: 600; text-transform: uppercase; margin-bottom: 5px; }
-    .info-value { font-size: 1.1rem; font-weight: bold; color: white; }
-    .verdict-box { background: rgba(15, 23, 42, 0.6); border-left: 4px solid; padding: 15px; margin-top: 15px; font-style: italic; color: #e2e8f0; }
-    .tech-section { background: rgba(0,0,0,0.2); padding: 15px; border-radius: 8px; margin-bottom: 15px; border: 1px solid rgba(255,255,255,0.05); }
-    
-    /* Style Khusus Tabel S/R */
-    .sr-table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 0.9rem; }
-    .sr-table td { padding: 8px; border-bottom: 1px solid var(--border); color: var(--text-main); }
-    .sr-table tr:last-child td { border-bottom: none; }
-    .sr-label { color: var(--text-muted); width: 40%; }
-    .sr-val { font-weight: bold; text-align: right; color: var(--accent); }
+:root {
+    --bull: #10b981;
+    --bear: #ef4444;
+    --wait: #64748b;
+}
+.block {
+    background: #0f172a;
+    border: 1px solid #1e293b;
+    border-radius: 12px;
+    padding: 20px;
+    margin-bottom: 20px;
+}
+.label {
+    font-size: 0.8rem;
+    color: #94a3b8;
+    text-transform: uppercase;
+}
+.value {
+    font-size: 1.1rem;
+    font-weight: bold;
+}
+.verdict {
+    padding: 16px;
+    border-left: 4px solid;
+    background: rgba(255,255,255,0.03);
+    font-style: italic;
+}
 </style>
 """, unsafe_allow_html=True)
 
-def parse_indo_json(text):
-    try:
-        clean = re.sub(r'```json\s*|\s*```', '', text).strip()
-        return json.loads(clean)
-    except:
-        return {"summary": "Gagal parse.", "keputusan": "WAIT", "entry": "-", "sl": "-", "tp1": "-", "support_terdekat": "-", "resistance_terdekat": "-"}
-
-def plot_tv_chart(df, symbol):
-    if df is None: return None
-    fig = go.Figure(data=[go.Candlestick(x=df['timestamp'], open=df['open'], high=df['high'], low=df['low'], close=df['close'])])
-    # Tambah EMA 50 & 200 di Chart
-    fig.add_trace(go.Scatter(x=df['timestamp'], y=df['EMA_50'], line=dict(color='yellow', width=1), name='EMA 50'))
-    fig.add_trace(go.Scatter(x=df['timestamp'], y=df['EMA_200'], line=dict(color='white', width=2), name='EMA 200'))
-    fig.update_layout(height=400, template="plotly_dark", title=f"{symbol} (H1)", xaxis_rangeslider_visible=False, paper_bgcolor="#1e293b", plot_bgcolor="#0f172a")
-    return fig
-
-def render_output_card(sym, data, mode):
-    action = data.get('keputusan', 'WAIT').upper()
-    bg_color = "#f43f5e" if action == "SHORT" else ("#10b981" if action == "LONG" else "#64748b")
-    
-    html = f"""
-<div class="output-container">
-    <div class="card-header futures-header">
-        <div>
-            <h2 style="margin:0; font-size: 1.5rem; color:white !important;">{sym} 
-                <span style="background:{bg_color}; color:white; padding:2px 10px; border-radius:4px; font-size:0.6em; vertical-align:middle;">{action}</span>
-            </h2>
-            <small style="color:#94a3b8;">Strategy: AltaQuant v2.2 (Science-Based)</small>
-        </div>
-        <div style="text-align:right;">
-            <div style="font-weight:bold; color:var(--futures-color);">AUDITED</div>
-            <small style="color:#aaa;">GPT-OSS-120B</small>
-        </div>
-    </div>
-    <div class="card-body">
-        <div class="grid-info">
-            <div class="info-box"><div class="info-label">Entry Zone</div><div class="info-value">{data.get('entry')}</div></div>
-            <div class="info-box" style="border-color: rgba(239, 68, 68, 0.3);"><div class="info-label">Stop Loss (ATR)</div><div class="info-value" style="color:var(--danger)">{data.get('sl')}</div></div>
-            <div class="info-box" style="border-color: rgba(16, 185, 129, 0.3);"><div class="info-label">Take Profit</div><div class="info-value" style="color:var(--secondary)">{data.get('tp1')} | {data.get('tp2')}</div></div>
-        </div>
-        <div class="tech-section">
-            <div class="tech-title">KEY LEVELS (S/R)</div>
-            <table class="sr-table">
-                <tr>
-                    <td class="sr-label">Resistance Terdekat</td>
-                    <td class="sr-val">{data.get('resistance_terdekat', '-')}</td>
-                </tr>
-                <tr>
-                    <td class="sr-label">Support Terdekat</td>
-                    <td class="sr-val">{data.get('support_terdekat', '-')}</td>
-                </tr>
-            </table>
-        </div>
-        <div class="tech-section">
-            <div class="tech-title">AUDIT REPORT</div>
-            <div style="margin-bottom:8px;"><strong>Fundamental:</strong> {data.get('fundamental', '-')}</div>
-            <div style="margin-bottom:8px;"><strong>Indikator (EMA/RSI):</strong> {data.get('tek_indikator', '-')}</div>
-            <div><strong>Validasi Candle:</strong> {data.get('tek_candle', '-')}</div>
-        </div>
-        <div class="verdict-box" style="border-color: {bg_color};">
-            <strong>FINAL VERDICT:</strong> "{data.get('summary', '-')}"
-        </div>
-    </div>
-</div>
-"""
-    return html
-
-# --- SIDEBAR & MAIN ---
+# =============================
+# SIDEBAR
+# =============================
 with st.sidebar:
-    st.header("Control Center")
-    analysis_mode = st.selectbox("Mode", ["Futures (Scalping)", "Spot"])
-    tf_options = ["15m", "5m", "1h", "4h"]
-    timeframe_selected = st.selectbox("Timeframe", tf_options, index=0)
-    mode_input = st.radio("Input", ["Manual", "Auto-Scan"])
-    sym_in = st.text_input("Pair", "BTC/USDT") if mode_input == "Manual" else None
+    st.title("AltaQuant Control Panel")
 
-st.title("AltaQuant Hybrid Core")
+    symbol = st.text_input("Trading Pair", "BTCUSDT")
+    mode = st.selectbox("Mode", ["Crypto Futures", "Spot"])
 
-tab1, tab2 = st.tabs(["ANALISA", "HISTORY"])
+    st.divider()
 
-with tab1:
-    if st.button("JALANKAN ANALISA", type="primary"):
-        with st.status("Hybrid AI Processing...", expanded=True) as status:
-            
-            # --- BAGIAN INI HILANG SEBELUMNYA (DEFINISI TARGETS) ---
-            # 1. Target Selection
-            if mode_input == "Manual": 
-                # Jika mode manual, targets hanya berisi 1 simbol yang diinput user
-                targets = [{'symbol': sym_in}]
-            else: 
-                # Jika mode auto, scan pasar dulu untuk dapat list targets
-                status.write("📡 Scanning Market...")
-                targets = scan_dynamic_market()
-            # -------------------------------------------------------
+    user_chart_context = st.text_area(
+        "Chart / Pattern Context (Optional)",
+        placeholder=(
+            "Example:\n"
+            "- H4 bullish structure (HH HL)\n"
+            "- Ascending triangle\n"
+            "- Context only, not a trigger"
+        )
+    )
 
-            results = []
-            
-            # Sekarang 'targets' sudah didefinisikan, loop ini akan aman
-            for t in targets:
-                sym = t['symbol']
-                status.write(f"🔍 Auto-Detect Timeframe untuk {sym}...")
-                
-                # Panggil fungsi Smart Fallback (H1 -> M30 -> M15)
-                # Perhatikan: Kita tidak mengoper timeframe manual lagi
-                df, context, used_tf = get_ai_context_indo(sym)
-                
-                if df is not None:
-                    status.write(f"👉 {sym}: Setup ditemukan di {used_tf}")
-                    
-                    # Layer 1: Sentiment
-                    sentiment = layer1_sentiment_analysis("Market News Simulation...")
-                    
-                    # Layer 3: Decision
-                    # Kirim info timeframe otomatis ke AI
-                    raw_json = layer3_final_decision(sym, context, sentiment, f"{analysis_mode} - Auto {used_tf}")
-                    data = parse_indo_json(raw_json)
-                    
-                    # Simpan hasil termasuk timeframe yang dipakai (used_tf)
-                    results.append({'symbol': sym, 'data': data, 'df': df, 'mode': analysis_mode, 'tf': used_tf})
-            
-            st.session_state['results'] = results
-            status.update(label="Selesai!", state="complete")
+    st.caption("ℹ️ Chart pattern is CONTEXT ONLY. No auto detection.")
 
-    # --- TAMPILAN HASIL ---
-    if 'results' in st.session_state:
-        for res in st.session_state['results']:
-            # Tampilkan Timeframe di Judul Chart
-            st.markdown(f"### Chart: {res['symbol']} ({res['tf']})")
-            
-            # Plot Chart
-            st.plotly_chart(plot_tv_chart(res['df'], res['symbol']), use_container_width=True)
-            
-            # Tampilkan Card
-            st.markdown(render_output_card(res['symbol'], res['data'], res['mode']), unsafe_allow_html=True)
+    equity = st.number_input("Account Equity ($)", value=1000.0)
+    entry_price = st.number_input("Assumed Entry Price", value=0.0)
+    atr = st.number_input("ATR (M15)", value=0.0)
+
+    run = st.button("RUN ANALYSIS", type="primary")
+
+# =============================
+# MAIN
+# =============================
+st.title("AltaQuant Hybrid Analytics")
+st.caption("Multi-Timeframe • Liquidity • Fundamental-Gated")
+
+if run:
+    with st.status("Running institutional audit pipeline...", expanded=True):
+
+        # =============================
+        # FUNDAMENTAL INPUT
+        # =============================
+        st.write("📰 Fetching crypto news & macro events...")
+        news_text = get_crypto_news(symbol)
+
+        st.write("✅ Fundamental signals collected")
+
+        # =============================
+        # TECHNICAL CONTEXT
+        # =============================
+        st.write("📊 Building multi-timeframe technical context...")
+        technical_context = build_ai_context(
+        symbol.replace("/", ""),  # 🔥 FIX SYMBOL FORMAT
+        user_chart_context
+        )
+
+        if technical_context is None:
+            st.error("Market data unavailable or insufficient candles.")
+            st.stop()
+
+        # =============================
+        # FINAL DECISION ENGINE
+        # =============================
+        st.write("🧠 Executing AltaQuant Core Engine...")
+        result = final_decision(
+            technical_data=technical_context,
+            fundamental_signals=news_text,
+            equity=equity,
+            atr=atr,
+            entry_price=entry_price
+        )
+
+        # =============================
+        # OUTPUT
+        # =============================
+        status = result.get("status", "WAIT")
+        direction = result.get("direction", "WAIT")
+
+        color = (
+            "var(--bull)" if direction == "LONG" else
+            "var(--bear)" if direction == "SHORT" else
+            "var(--wait)"
+        )
+
+        st.markdown(f"""
+        <div class="block">
+            <div class="label">Final Status</div>
+            <div class="value" style="color:{color};">{status}</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        col1, col2, col3 = st.columns(3)
+
+        col1.markdown(f"""
+        <div class="block">
+            <div class="label">Direction</div>
+            <div class="value">{direction}</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        col2.markdown(f"""
+        <div class="block">
+            <div class="label">Confidence</div>
+            <div class="value">{result.get("confidence", "-")}</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        col3.markdown(f"""
+        <div class="block">
+            <div class="label">Risk</div>
+            <div class="value">{result.get("risk", {})}</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        st.markdown(f"""
+        <div class="verdict" style="border-color:{color}">
+            <strong>Fundamental Assessment:</strong><br>
+            {json.dumps(result.get("fundamental", {}), indent=2)}
+        </div>
+        """, unsafe_allow_html=True)
+
+        st.divider()
+
+        st.subheader("Engine Output (Debug)")
+        st.json(result)
+
+# =============================
+# LEGACY BLOCK (DISABLED)
+# =============================
+
+# ❌ OLD PIPELINE — NO LONGER USED
+# user_pattern_context = st.text_input("Chart Pattern Context (optional)")
+# if st.button("Run Legacy Pipeline"):
+#     decision = run_ai_pipeline(
+#         technical_data=st.session_state["technical"],
+#         fundamental_signals=st.session_state["fundamental"],
+#         equity=equity,
+#         atr=atr,
+#         entry_price=entry_price
+#     )
+#     st.json(decision)
