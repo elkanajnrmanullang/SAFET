@@ -104,6 +104,8 @@ def render_output_card(sym, data, mode):
 with st.sidebar:
     st.header("Control Center")
     analysis_mode = st.selectbox("Mode", ["Futures (Scalping)", "Spot"])
+    tf_options = ["15m", "5m", "1h", "4h"]
+    timeframe_selected = st.selectbox("Timeframe", tf_options, index=0)
     mode_input = st.radio("Input", ["Manual", "Auto-Scan"])
     sym_in = st.text_input("Pair", "BTC/USDT") if mode_input == "Manual" else None
 
@@ -114,36 +116,54 @@ tab1, tab2 = st.tabs(["ANALISA", "HISTORY"])
 with tab1:
     if st.button("JALANKAN ANALISA", type="primary"):
         with st.status("Hybrid AI Processing...", expanded=True) as status:
+            
+            # --- BAGIAN INI HILANG SEBELUMNYA (DEFINISI TARGETS) ---
             # 1. Target Selection
-            if mode_input == "Manual": targets = [{'symbol': sym_in}]
+            if mode_input == "Manual": 
+                # Jika mode manual, targets hanya berisi 1 simbol yang diinput user
+                targets = [{'symbol': sym_in}]
             else: 
+                # Jika mode auto, scan pasar dulu untuk dapat list targets
                 status.write("📡 Scanning Market...")
                 targets = scan_dynamic_market()
-            
+            # -------------------------------------------------------
+
             results = []
+            
+            # Sekarang 'targets' sudah didefinisikan, loop ini akan aman
             for t in targets:
                 sym = t['symbol']
-                status.write(f"🔍 Processing {sym}...")
+                status.write(f"🔍 Auto-Detect Timeframe untuk {sym}...")
                 
-                # 2. Get Data & Context
-                df, context, _ = get_ai_context_indo(sym)
+                # Panggil fungsi Smart Fallback (H1 -> M30 -> M15)
+                # Perhatikan: Kita tidak mengoper timeframe manual lagi
+                df, context, used_tf = get_ai_context_indo(sym)
                 
                 if df is not None:
-                    # 3. Layer 1: Gemini (Sentiment)
+                    status.write(f"👉 {sym}: Setup ditemukan di {used_tf}")
+                    
+                    # Layer 1: Sentiment
                     sentiment = layer1_sentiment_analysis("Market News Simulation...")
                     
-                    # 4. Layer 2: Screener (Opsional, kita skip biar cepat di demo ini)
-                    
-                    # 5. Layer 3: Auditor (GPT-OSS)
-                    raw_json = layer3_final_decision(sym, context, sentiment, analysis_mode)
+                    # Layer 3: Decision
+                    # Kirim info timeframe otomatis ke AI
+                    raw_json = layer3_final_decision(sym, context, sentiment, f"{analysis_mode} - Auto {used_tf}")
                     data = parse_indo_json(raw_json)
-                    results.append({'symbol': sym, 'data': data, 'df': df, 'mode': analysis_mode})
+                    
+                    # Simpan hasil termasuk timeframe yang dipakai (used_tf)
+                    results.append({'symbol': sym, 'data': data, 'df': df, 'mode': analysis_mode, 'tf': used_tf})
             
             st.session_state['results'] = results
             status.update(label="Selesai!", state="complete")
 
-    # Display
+    # --- TAMPILAN HASIL ---
     if 'results' in st.session_state:
         for res in st.session_state['results']:
+            # Tampilkan Timeframe di Judul Chart
+            st.markdown(f"### Chart: {res['symbol']} ({res['tf']})")
+            
+            # Plot Chart
             st.plotly_chart(plot_tv_chart(res['df'], res['symbol']), use_container_width=True)
+            
+            # Tampilkan Card
             st.markdown(render_output_card(res['symbol'], res['data'], res['mode']), unsafe_allow_html=True)

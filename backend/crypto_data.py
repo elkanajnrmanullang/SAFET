@@ -19,7 +19,7 @@ def get_market_overview():
         return {'btc_price': btc['last'], 'btc_change': btc['percentage']}
     except: return {'btc_price': 0, 'btc_change': 0}
 
-def fetch_market_data(symbol, timeframe='1h', limit=500):
+def fetch_market_data(symbol, timeframe='1h', limit=1000):
     try:
         exc = get_exchange()
         bars = exc.fetch_ohlcv(symbol, timeframe, limit=limit)
@@ -65,59 +65,81 @@ def calc_technical_indicators(df):
         return df
 
 # --- CONTEXT BUILDER ---
-def get_ai_context_indo(symbol, poc_val=0):
-    df_chart = fetch_market_data(symbol, '1h', limit=300) # H1 untuk Trend Utama
+def get_ai_context_indo(symbol, preferred_tf='1h'):
+    # Daftar prioritas timeframe untuk dicek
+    # Jika user minta spesifik (misal di UI pilih M5), list ini bisa di-override
+    scan_sequence = ['1h', '30m', '15m']
     
-    if df_chart is None: return None, "Error", 0
+    selected_df = None
+    selected_tf = '1h'
+    final_context = ""
+    is_valid_setup = False
     
-    df_chart = calc_technical_indicators(df_chart)
-    l_1h = df_chart.iloc[-1]
+    # --- LOOPING CEK TIMEFRAME ---
+    for tf in scan_sequence:
+        # Ambil data
+        df = fetch_market_data(symbol, tf, limit=1000)
+        if df is None: continue
+        
+        # Hitung Indikator
+        df = calc_technical_indicators(df)
+        last_row = df.iloc[-1]
+        
+        # Cek Syarat Pullback: Jarak harga ke EMA 50 < 1.1%
+        price = last_row['close']
+        ema50 = last_row['EMA_50']
+        gap_percent = abs((price - ema50) / ema50) * 100
+        
+        # Jika ketemu kondisi Pullback (Gap < 1.1%), STOP mencari
+        if gap_percent < 1.1:
+            selected_df = df
+            selected_tf = tf
+            is_valid_setup = True
+            break # KELUAR DARI LOOP, kita pakai timeframe ini!
     
-    # 1. ANALISA TREND (EMA 200 Logic)
-    price = l_1h['close']
-    ema200 = l_1h['EMA_200']
-    ema50 = l_1h['EMA_50']
-    
-    trend_status = "BULLISH (Harga > EMA 200)" if price > ema200 else "BEARISH (Harga < EMA 200)"
-    value_gap = ((price - ema50) / ema50) * 100 # Jarak harga ke EMA 50 dalam %
-    
-    pullback_status = "Harga di Value Zone (Dekat EMA 50)" if abs(value_gap) < 1.0 else "Harga Over-Extended (Jauh dari EMA 50)"
+    # --- FALLBACK JIKA TIDAK ADA YG COCOK ---
+    # Jika sampai loop selesai tidak ada yg pullback, pakai H1 (atau TF pertama)
+    if selected_df is None:
+        selected_tf = scan_sequence[0]
+        selected_df = fetch_market_data(symbol, selected_tf, limit=1000)
+        if selected_df is not None:
+            selected_df = calc_technical_indicators(selected_df)
+            
+    if selected_df is None: return None, "Error Data", selected_tf
 
-    # 2. VOLUME CHECK
-    vol_status = "SPIKE (Validasi Smart Money)" if l_1h['volume'] > l_1h['Vol_SMA'] else "Low/Normal"
-
-    # 3. SUPPORT & RESISTANCE DATA
-    # Ambil Pivot terakhir yang valid (bukan NaN)
-    last_res = df_chart[df_chart['high'] == df_chart['Pivot_High']]['high'].iloc[-1] if not df_chart[df_chart['high'] == df_chart['Pivot_High']].empty else price * 1.05
-    last_sup = df_chart[df_chart['low'] == df_chart['Pivot_Low']]['low'].iloc[-1] if not df_chart[df_chart['low'] == df_chart['Pivot_Low']].empty else price * 0.95
-
-    # 4. VISION AI (Chart Pattern)
-    vis_chart, _ = detect_all_patterns(df_chart)
+    # --- GENERATE CONTEXT UNTUK AI (Pakai Data Terpilih) ---
+    l_last = selected_df.iloc[-1]
+    price = l_last['close']
+    ema200 = l_last['EMA_200']
+    ema50 = l_last['EMA_50']
     
+    trend_status = "BULLISH" if price > ema200 else "BEARISH"
+    
+    # Hitung ulang status untuk teks
+    gap_final = abs((price - ema50) / ema50) * 100
+    pullback_msg = "✅ VALID PULLBACK (Harga di Value Zone)" if gap_final < 1.1 else "⚠️ NO SETUP (Harga Jauh dari EMA 50)"
+
+    # Kita tambahkan info TIMEFRAME di prompt agar AI sadar
     context = f"""
     [DATA PASAR REAL-TIME]:
+    - Timeframe Terpilih: {selected_tf} (Otomatis by System)
     - Harga: {price}
-    - ATR (Volatilitas): {l_1h['ATR']:.4f}
+    - Status Setup: {pullback_msg}
     
-    [ANALISA TREND (EMA Rules)]:
-    - EMA 200 (Trend Utama): {ema200:.2f} -> Status: {trend_status}
-    - EMA 50 (Value Zone): {ema50:.2f} -> Status: {pullback_status}
+    [ANALISA TREND ({selected_tf})]:
+    - EMA 200 (Trend): {ema200:.2f} -> {trend_status}
+    - EMA 50 (Value): {ema50:.2f} -> Gap: {gap_final:.2f}%
     
-    [MOMENTUM & VOLUME]:
-    - RSI (14): {l_1h['RSI']:.2f}
-    - Volume: {vol_status}
-    
-    [KEY LEVELS (Untuk Tabel)]:
-    - Resistance Terdekat: {last_res}
-    - Support Terdekat: {last_sup}
-    
-    [VISUAL PATTERN]:
-    - AI Vision Detect: {vis_chart if vis_chart else "Tidak ada pola jelas"}
-    
-    [OHLC TERAKHIR (5 Candle)]:
-    {df_chart.tail(5)[['open','high','low','close']].values.tolist()}
+    [MOMENTUM]:
+    - RSI (14): {l_last['RSI']:.2f}
+    - Volume Spike: {"YA" if l_last['volume'] > l_last['Vol_SMA'] else "TIDAK"}
+
+    [OHLC TERAKHIR]:
+    {selected_df.tail(5)[['open','high','low','close']].values.tolist()}
     """
-    return df_chart, context, 0
+    
+    # Return 3 hal: DataFrame, Teks Context, dan Timeframe yang akhirnya dipakai
+    return selected_df, context, selected_tf
 
 # Scanner sederhana untuk mendapatkan kandidat
 def scan_dynamic_market():
