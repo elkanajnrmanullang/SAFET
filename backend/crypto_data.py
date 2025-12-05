@@ -3,14 +3,22 @@ import pandas as pd
 import pandas_ta as ta
 import numpy as np
 
-# =============================
-# CONNECTION
-# =============================
+from backend.indicators import (
+    apply_indicators_by_tf,
+    compute_atr,
+    compute_trend_structure
+)
+
+
+# ================================================================
+#  CONNECTION
+# ================================================================
 def get_exchange():
     return ccxt.binance({
         "enableRateLimit": True,
         "options": {"defaultType": "future"}
     })
+
 
 def fetch_market_data(symbol, timeframe, limit=500):
     exc = get_exchange()
@@ -25,53 +33,32 @@ def fetch_market_data(symbol, timeframe, limit=500):
 
     df = pd.DataFrame(
         ohlcv,
-        columns=["timestamp","open","high","low","close","volume"]
+        columns=["timestamp", "open", "high", "low", "close", "volume"]
     )
     df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
     return df
 
 
-# =============================
-# INDICATORS BY TF
-# =============================
+# ================================================================
+#  INDICATOR WRAPPER
+# ================================================================
 def apply_indicators(df, tf):
+    """
+    Wrapper agar semua indikator terpusat di indicators.py.
+    """
     if df is None or df.empty:
         return None
-
-    # shared
-    df["Vol_MA20"] = df["volume"].rolling(20).mean()
-
-    if tf in ["4h", "1h"]:
-        df["EMA50"] = ta.ema(df["close"], 50)
-        df["EMA200"] = ta.ema(df["close"], 200)
-        df["ADX"] = ta.adx(
-            df["high"], df["low"], df["close"], 14
-        )["ADX_14"]
-
-    if tf == "30m":
-        df["EMA20"] = ta.ema(df["close"], 20)
-        df["EMA50"] = ta.ema(df["close"], 50)
-        df["VWAP"] = ta.vwap(
-            df["high"], df["low"], df["close"], df["volume"]
-        )
-
-    if tf == "15m":
-        df["EMA20"] = ta.ema(df["close"], 20)
-        df["ATR"] = ta.atr(
-            df["high"], df["low"], df["close"], 14
-        )
-
-    df.dropna(inplace=True)
-    return df
+    return apply_indicators_by_tf(df, tf)
 
 
-# =============================
-# TREND DETECTION (MINIMAL & STABLE)
-# =============================
+# ================================================================
+#  TREND DETECTION (Institutional Bias)
+# ================================================================
 def detect_trend(df):
     """
-    Simple institutional bias:
-    EMA50 vs EMA200
+    Institutional trend bias:
+    LONG  = EMA50 > EMA200
+    SHORT = EMA50 < EMA200
     """
     if df is None or len(df) < 200:
         return {"valid": False}
@@ -82,32 +69,29 @@ def detect_trend(df):
         return {"valid": True, "direction": "LONG"}
     elif last["EMA50"] < last["EMA200"]:
         return {"valid": True, "direction": "SHORT"}
-    else:
-        return {"valid": False}
+    return {"valid": False}
 
 
-# =============================
-# CONTEXT BUILDER (CORE)
-# =============================
+# ================================================================
+#  CONTEXT BUILDER (CORE)
+# ================================================================
 def build_ai_context(symbol: str, user_chart_context: str | None = None):
 
-    # ❌ SALAH (DIHAPUS)
-    # df = fetch_ohlcv(symbol)
-
-    # ✅ BENAR
+    # 15m = main operational timeframe
     df = fetch_market_data(symbol, "15m")
-
-    if df is None or df.empty or len(df) < 100:
+    if df is None or len(df) < 100:
         return None
 
     df = apply_indicators(df, "15m")
     if df is None or df.empty:
         return None
 
+    # Higher TF for trend
     trend_df = fetch_market_data(symbol, "4h", limit=300)
     trend_df = apply_indicators(trend_df, "4h")
 
     trend = detect_trend(trend_df)
+    market_structure = compute_trend_structure(df)
 
     last = df.iloc[-1]
 
@@ -115,29 +99,32 @@ def build_ai_context(symbol: str, user_chart_context: str | None = None):
         "symbol": symbol,
         "price": float(last["close"]),
         "volume": float(last["volume"]),
-        "atr": float(last["ATR"]),
+        "atr": float(last.get("ATR", compute_atr(df))),
         "trend": trend,
+        "market_structure": market_structure,
         "user_context": user_chart_context or ""
     }
-
     return context
 
 
-# =============================
-# TECHNICAL EVALUATOR
-# =============================
+# ================================================================
+#  TECHNICAL EVALUATOR (Used by AI pipeline)
+# ================================================================
 def evaluate_technical(data):
-    """
-    Dipakai oleh ai_engine.run_ai_pipeline
-    """
-
     trend = data.get("trend")
 
     if not trend or not trend.get("valid"):
         return {"valid": False, "reason": "Trend invalid"}
 
+    direction = trend["direction"]
+
+    # Confidence calculation ringan (rule-based)
+    base_conf = 0.70
+    if data.get("market_structure") == direction:
+        base_conf += 0.12
+
     return {
         "valid": True,
-        "direction": trend["direction"],
-        "confidence": 0.82
+        "direction": direction,
+        "confidence": round(base_conf, 3)
     }

@@ -1,135 +1,191 @@
+"""
+Database helper (SQLite) for trade history and adaptive learning rules.
+Improved: ensures data directory exists, safer parameterized queries,
+additional helper functions for saving AI decision records and retrieving them.
+"""
+
 import sqlite3
 import json
+import os
 from datetime import datetime
+from typing import Dict, Any, List
 
-DB_NAME = "data/alta_master.db"
+DB_DIR = "data"
+DB_NAME = os.path.join(DB_DIR, "alta_master.db")
+os.makedirs(DB_DIR, exist_ok=True)
+
+
+def _get_conn():
+    return sqlite3.connect(DB_NAME, timeout=10)
+
 
 def init_db():
-    conn = sqlite3.connect(DB_NAME)
+    conn = _get_conn()
     c = conn.cursor()
-    
-    # --- RESET DATABASE (KHUSUS PENGUJIAN) ---
-    # Hapus baris di bawah ini jika data ingin dipertahankan di masa depan
-    # c.execute("DROP TABLE IF EXISTS trade_history")
-    # c.execute("DROP TABLE IF EXISTS learning_rules")
-    # -----------------------------------------
-    
-    # Table History
-    c.execute('''CREATE TABLE IF NOT EXISTS trade_history (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    symbol TEXT,
-                    action TEXT,
-                    entry TEXT,
-                    sl TEXT,
-                    tp TEXT,
-                    reason TEXT,
-                    timestamp DATETIME,
-                    status TEXT DEFAULT 'OPEN', 
-                    outcome_note TEXT
-                )''')
-    
-    # Table Learning Rules
-    c.execute('''CREATE TABLE IF NOT EXISTS learning_rules (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    rule_type TEXT,
-                    keyword TEXT,
-                    description TEXT
-                )''')
+
+    # Tables
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS trade_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            symbol TEXT,
+            decision_json TEXT,
+            entry_price REAL,
+            sl REAL,
+            tp REAL,
+            position_size REAL,
+            reason TEXT,
+            timestamp DATETIME,
+            status TEXT DEFAULT 'OPEN',
+            outcome_note TEXT
+        )
+    ''')
+
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS learning_rules (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            rule_type TEXT,
+            keyword TEXT,
+            description TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+
     conn.commit()
     conn.close()
+
 
 # --- HISTORY FUNCTIONS ---
-def save_trade(symbol, data):
-    conn = sqlite3.connect(DB_NAME)
+def save_trade(symbol: str, decision: Dict[str, Any]) -> int:
+    """
+    Save a trade decision into trade_history.
+    decision: the full decision dict from ai_engine including risk dict.
+    Returns: inserted row id
+    """
+    conn = _get_conn()
     c = conn.cursor()
-    c.execute('''INSERT INTO trade_history (symbol, action, entry, sl, tp, reason, timestamp)
-                 VALUES (?, ?, ?, ?, ?, ?, ?)''', 
-              (symbol, data.get('keputusan'), data.get('entry'), data.get('sl'), 
-               f"TP1:{data.get('tp1')} | TP2:{data.get('tp2')}", 
-               data.get('alasan'), datetime.now()))
+    now = datetime.utcnow().isoformat()
+
+    entry = decision.get("entry_price") or (decision.get("risk") or {}).get("entry") or None
+    sl = (decision.get("risk") or {}).get("stop_loss")
+    tp = (decision.get("risk") or {}).get("take_profit")
+    size = (decision.get("risk") or {}).get("position_size")
+    reason = json.dumps({
+        "technical": decision.get("technical") or {},
+        "fundamental": decision.get("fundamental") or {},
+        "anomaly": decision.get("anomaly") or {},
+        "notes": decision.get("notes") or []
+    }, default=str)
+
+    c.execute('''
+        INSERT INTO trade_history (symbol, decision_json, entry_price, sl, tp, position_size, reason, timestamp)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (symbol, json.dumps(decision, default=str), entry, sl, tp, size, reason, now))
+
+    rowid = c.lastrowid
     conn.commit()
     conn.close()
+    return int(rowid)
 
-def get_history():
-    conn = sqlite3.connect(DB_NAME)
+
+def get_history(limit: int = 100) -> List[Dict[str, Any]]:
+    conn = _get_conn()
     conn.row_factory = sqlite3.Row
     c = conn.cursor()
-    c.execute("SELECT * FROM trade_history ORDER BY id DESC")
+    c.execute("SELECT * FROM trade_history ORDER BY id DESC LIMIT ?", (limit,))
     rows = c.fetchall()
     conn.close()
-    return rows
+    results = []
+    for r in rows:
+        results.append({
+            "id": r["id"],
+            "symbol": r["symbol"],
+            "decision": json.loads(r["decision_json"]) if r["decision_json"] else None,
+            "entry_price": r["entry_price"],
+            "sl": r["sl"],
+            "tp": r["tp"],
+            "position_size": r["position_size"],
+            "reason": r["reason"],
+            "timestamp": r["timestamp"],
+            "status": r["status"],
+            "outcome_note": r["outcome_note"]
+        })
+    return results
 
-def update_outcome(trade_id, status, note=""):
-    conn = sqlite3.connect(DB_NAME)
+
+def update_outcome(trade_id: int, status: str, note: str = ""):
+    conn = _get_conn()
     c = conn.cursor()
     c.execute("UPDATE trade_history SET status = ?, outcome_note = ? WHERE id = ?", (status, note, trade_id))
     conn.commit()
     conn.close()
 
-def update_outcome_and_learn(trade_id, status, note):
-    conn = sqlite3.connect(DB_NAME)
+
+def update_outcome_and_learn(trade_id: int, status: str, note: str):
+    """
+    Update history and add an adaptive rule for RL.
+    """
+    conn = _get_conn()
     c = conn.cursor()
-    
-    # 1. Update Status
     c.execute("UPDATE trade_history SET status = ?, outcome_note = ? WHERE id = ?", (status, note, trade_id))
-    
-    # 2. Add Knowledge (Adaptive Learning)
-    if status == 'LOSS':
-        c.execute("INSERT INTO learning_rules (rule_type, keyword, description) VALUES (?, ?, ?)", 
-                  ('AVOID', 'User Feedback', note))
-    elif status == 'WIN':
-        c.execute("INSERT INTO learning_rules (rule_type, keyword, description) VALUES (?, ?, ?)", 
-                  ('PREFER', 'Winning Pattern', note))
-                  
+
+    if status.upper() == 'LOSS':
+        c.execute("INSERT INTO learning_rules (rule_type, keyword, description) VALUES (?, ?, ?)",
+                  ('AVOID', 'user_feedback', note))
+    elif status.upper() == 'WIN':
+        c.execute("INSERT INTO learning_rules (rule_type, keyword, description) VALUES (?, ?, ?)",
+                  ('PREFER', 'winning_pattern', note))
+
     conn.commit()
     conn.close()
 
-def get_adaptive_rules():
-    """Mengambil aturan pembelajaran (AVOID & PREFER)"""
-    conn = sqlite3.connect(DB_NAME)
+
+def get_adaptive_rules(limit: int = 10) -> Dict[str, List[str]]:
+    conn = _get_conn()
     conn.row_factory = sqlite3.Row
     c = conn.cursor()
-    
-    # Ambil Kesalahan (AVOID)
-    c.execute("SELECT description FROM learning_rules WHERE rule_type = 'AVOID' ORDER BY id DESC LIMIT 5")
-    avoids = [r['description'] for r in c.fetchall()]
 
-    # Ambil Pola Sukses (PREFER)
-    c.execute("SELECT description FROM learning_rules WHERE rule_type = 'PREFER' ORDER BY id DESC LIMIT 5")
-    prefers = [r['description'] for r in c.fetchall()]
-    
+    c.execute("SELECT description FROM learning_rules WHERE rule_type = 'AVOID' ORDER BY id DESC LIMIT ?", (limit,))
+    avoids = [r["description"] for r in c.fetchall()]
+
+    c.execute("SELECT description FROM learning_rules WHERE rule_type = 'PREFER' ORDER BY id DESC LIMIT ?", (limit,))
+    prefers = [r["description"] for r in c.fetchall()]
+
     conn.close()
-    
-    rules_text = ""
-    if avoids:
-        rules_text += "\n[⚠️ JANGAN ULANGI KESALAHAN INI]:\n"
-        for i, rule in enumerate(avoids):
-            rules_text += f"- {rule}\n"
-            
-    if prefers:
-        rules_text += "\n[✅ ULANGI POLA SUKSES INI]:\n"
-        for i, rule in enumerate(prefers):
-            rules_text += f"- {rule}\n"
-            
-    return rules_text
+    return {"avoid": avoids, "prefer": prefers}
 
-# --- STATISTICS ENGINE (ACCURACY TEST) ---
-def get_performance_stats():
-    conn = sqlite3.connect(DB_NAME)
+
+# --- STATISTICS ---
+def get_performance_stats() -> Dict[str, Any]:
+    conn = _get_conn()
     c = conn.cursor()
-    c.execute("SELECT status FROM trade_history WHERE status IN ('WIN', 'LOSS')")
-    data = c.fetchall()
+    c.execute("SELECT status FROM trade_history WHERE status IN ('WIN','LOSS')")
+    rows = c.fetchall()
     conn.close()
-    
-    total = len(data)
+    total = len(rows)
     if total == 0:
         return {"win_rate": 0.0, "wins": 0, "losses": 0, "total": 0}
-    
-    wins = sum(1 for x in data if x[0] == 'WIN')
+    wins = sum(1 for r in rows if r[0] == 'WIN')
     losses = total - wins
-    win_rate = (wins / total) * 100
-    
-    return {"win_rate": win_rate, "wins": wins, "losses": losses, "total": total}
+    return {"win_rate": (wins / total) * 100.0, "wins": wins, "losses": losses, "total": total}
 
-# Init on import (Akan mereset DB karena ada DROP TABLE)
+
+# Init DB on import
 init_db()
+
+
+# quick self-test
+if __name__ == "__main__":
+    # create demo entry
+    sample = {
+        "status": "EXECUTE",
+        "direction": "LONG",
+        "confidence": 0.82,
+        "risk": {"position_size": 0.1, "stop_loss": 42000, "take_profit": 43000},
+        "technical": {"direction": "LONG"},
+        "fundamental": {"flag": "GREEN"},
+        "anomaly": {"anomaly": False},
+        "notes": ["demo"]
+    }
+    id = save_trade("BTC/USDT", sample)
+    print("saved id:", id)
+    print("history:", get_history(5))
