@@ -1,19 +1,7 @@
-"""
-FundamentalEngine maps fundamental signals into standardized trading constraints:
-(flag, action, reason)
-
-Output consumed by ai_engine reinforcement + risk layering.
-
-Supported sources:
-- Raw news text
-- Cryptopanic processed events
-- Structured signals (keyword, category, impact)
-"""
-
 from typing import List, Dict, Any
 
 # ===========================
-# FUNDAMENTAL DICTIONARIES
+# KEYWORD DICTIONARIES
 # ===========================
 
 CRITICAL_KEYWORDS = {
@@ -24,15 +12,25 @@ CRITICAL_KEYWORDS = {
     "stablecoin depeg": "critical",
     "network outage": "critical",
     "protocol exploit": "critical",
+    "regulatory ban": "critical",
 }
 
+# Gabungan High Risk & On-Chain (High Priority)
 HIGH_RISK_KEYWORDS = {
-    "funding rate extreme": "high",
-    "oi spike": "high",
-    "open interest spike": "high",
-    "liquidation cluster": "high",
-    "short squeeze": "high",
-    "long squeeze": "high",
+    # Derivatives
+    "funding rate extreme": "squeeze_risk",
+    "oi spike": "squeeze_risk",
+    "open interest spike": "squeeze_risk",
+    "liquidation cluster": "squeeze_risk",
+    "short squeeze": "squeeze_risk",
+    "long squeeze": "squeeze_risk",
+    
+    # On-Chain Flow
+    "exchange inflow": "high",
+    "whale accumulation": "high",
+    "whale distribution": "high",
+    "token unlock": "high",
+    "large inflow": "high",
 }
 
 MACRO_KEYWORDS = {
@@ -43,11 +41,8 @@ MACRO_KEYWORDS = {
     "jobs report": "macro",
     "rate hike": "macro",
     "rate cut": "macro",
+    "inflation data": "macro",
 }
-
-# ===========================
-# FUNDAMENTAL ENGINE
-# ===========================
 
 class FundamentalEngine:
     def __init__(self):
@@ -55,125 +50,66 @@ class FundamentalEngine:
         self.high_risk_map = HIGH_RISK_KEYWORDS
         self.macro_map = MACRO_KEYWORDS
 
-    # -------------------------------------------------------------
-    # TEXT ANALYZER: FREEFORM NEWS/TWEETS TEXT
-    # -------------------------------------------------------------
-    def analyze_text(self, text: str) -> Dict[str, Any]:
-        """
-        Lightweight free-text scanner. Converts raw text into:
-        {flag, action, reason}
-        """
-
-        text_l = (text or "").lower()
-        detected = []
-
-        # CRITICAL FIRST → hard block
-        for k in self.critical_map:
-            if k in text_l:
-                return {
-                    "flag": "RED",
-                    "action": "BLOCK",
-                    "reason": [k]
-                }
-
-        # MACRO → generally medium severity
-        for k in self.macro_map:
-            if k in text_l:
-                detected.append({"keyword": k, "impact": "macro"})
-
-        # HIGH RISK → derivatives signal
-        for k in self.high_risk_map:
-            if k in text_l:
-                detected.append({"keyword": k, "impact": "high"})
-
-        # default evaluation
-        if not detected:
-            return {
-                "flag": "GREEN",
-                "action": "ALLOW_FULL",
-                "reason": ["no_significant_fundamental"]
-            }
-
-        # If any macro
-        if any(d["impact"] == "macro" for d in detected):
-            return {
-                "flag": "YELLOW",
-                "action": "REDUCE_SIZE",
-                "reason": [d["keyword"] for d in detected]
-            }
-
-        # If any high-risk derivatives signal
-        if any(d["impact"] == "high" for d in detected):
-            return {
-                "flag": "YELLOW",
-                "action": "REDUCE_SIZE",
-                "reason": [d["keyword"] for d in detected]
-            }
-
-        return {
-            "flag": "GREEN",
-            "action": "ALLOW_FULL",
-            "reason": ["fallback_no_detect"]
-        }
-
-    # -------------------------------------------------------------
-    # STRUCTURED SIGNAL EVALUATOR
-    # -------------------------------------------------------------
     def evaluate(self, signals: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """
-        Expected signals example:
-        [
-            {"keyword": "fomc", "impact": "macro"},
-            {"keyword": "funding rate extreme", "impact": "high"}
-        ]
-        """
-
         if not signals:
             return {"flag": "GREEN", "action": "ALLOW_FULL", "reason": ["no_signals"]}
 
-        final_flag = "GREEN"
-        final_action = "ALLOW_FULL"
+        # 1. State Tracking
+        has_critical = False
+        has_macro = False
+        
+        # Squeeze Logic Tracking
+        has_funding_extreme = False
+        has_oi_spike = False
+        
         reasons = []
 
+        # 2. Scanning Loop
         for s in signals:
-            keyword = s.get("keyword", "").lower()
+            kw = s.get("keyword", "").lower()
             impact = s.get("impact", "").lower()
 
-            # CRITICAL → immediate override
-            if keyword in self.critical_map or impact == "critical":
-                return {
-                    "flag": "RED",
-                    "action": "BLOCK",
-                    "reason": [keyword or "critical_signal"]
-                }
+            if kw in self.critical_map or impact == "critical":
+                has_critical = True
+                reasons.append(kw)
 
-            # MACRO EVENT
-            if keyword in self.macro_map or impact == "macro":
-                final_flag = "YELLOW"
-                final_action = "REDUCE_SIZE"
-                reasons.append(keyword or "macro_event")
+            if kw in self.macro_map or impact == "macro":
+                has_macro = True
+                reasons.append(kw)
 
-            # HIGH RISK (derivatives)
-            if keyword in self.high_risk_map or impact == "high":
-                final_flag = "YELLOW"
-                final_action = "REDUCE_SIZE"
-                reasons.append(keyword or "high_risk_event")
+            if "funding rate extreme" in kw:
+                has_funding_extreme = True
+            if "oi spike" in kw or "open interest spike" in kw:
+                has_oi_spike = True
+            
+            if kw in self.high_risk_map:
+                reasons.append(kw)
 
-            # fallback: any high-impact non-mapped event
-            if impact in {"medium"}:
-                final_flag = "YELLOW"
-                final_action = "REDUCE_SIZE"
-                reasons.append(keyword or "medium_impact_signal")
+        # 3. Decision Logic
+        
+        # A. CRITICAL override everything
+        if has_critical:
+            return {"flag": "RED", "action": "BLOCK", "reason": reasons}
 
-        return {
-            "flag": final_flag,
-            "action": final_action,
-            "reason": reasons or ["no_specific_reason"]
-        }
+        # B. Squeeze Check (Combination Rule)
+        if has_funding_extreme and has_oi_spike:
+            return {
+                "flag": "RED", 
+                "action": "BLOCK", 
+                "reason": ["High Squeeze Risk (Funding + OI Spike)"]
+            }
 
+        # C. Macro Check
+        if has_macro:
+            return {"flag": "YELLOW", "action": "REDUCE_SIZE", "reason": reasons}
+            
+        # D. Generic High Risk (On-chain, single derivative signal)
+        if len(reasons) > 0:
+             return {"flag": "YELLOW", "action": "REDUCE_SIZE", "reason": reasons}
 
-# Quick test
-if __name__ == "__main__":
-    engine = FundamentalEngine()
-    print(engine.analyze_text("Breaking: funding rate extreme and oi spike detected"))
-    print(engine.evaluate([{"keyword": "funding rate extreme", "impact": "high"}]))
+        return {"flag": "GREEN", "action": "ALLOW_FULL", "reason": ["Clean"]}
+
+    # Text analyzer helper (tetap sama, bisa update map reference)
+    def analyze_text(self, text: str) -> Dict[str, Any]:
+        # (Logika serupa dengan evaluate, disederhanakan untuk raw text)
+        return self.evaluate([{"keyword": k} for k in text.lower().split() if k in {**self.critical_map, **self.high_risk_map, **self.macro_map}])

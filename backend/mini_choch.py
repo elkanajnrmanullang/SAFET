@@ -1,95 +1,93 @@
 """
-Mini CHOCH / BOS Detector
--------------------------
-Dipakai sebagai validasi micro-structure (15m) sebelum trade diizinkan.
-
-Rules:
-- BOS = price menembus swing high/low sebelumnya
-- CHOCH = dari bearish ke bullish atau sebaliknya (dilihat dari struktur 3 swing)
+Mini CHOCH / BOS / Liquidity Detector
+-------------------------------------
+Handles M30 (Setup/Liquidity) and M15 (Execution) logic.
 """
 
-from backend.crypto_data import fetch_market_data
-
-
-def _find_swings(df):
+def _is_sweep(candle, neighbor_high, neighbor_low, direction):
     """
-    Identify swing high / swing low sederhana.
-    Tidak ultra kompleks agar pipeline tetap stabil.
+    Detect liquidity sweep:
+    - Bearish Sweep (Short): High candle menembus prev High, tapi Close di bawahnya.
+    - Bullish Sweep (Long): Low candle menembus prev Low, tapi Close di atasnya.
     """
-    highs = []
-    lows = []
+    open_c, close_c = candle["open"], candle["close"]
+    high_c, low_c = candle["high"], candle["low"]
+    
+    if direction == "LONG":
+        # Sweep Low: Ekor bawah panjang mengambil likuiditas low tetangga
+        if low_c < neighbor_low and min(open_c, close_c) > neighbor_low:
+            return True
+    elif direction == "SHORT":
+        # Sweep High: Ekor atas panjang mengambil likuiditas high tetangga
+        if high_c > neighbor_high and max(open_c, close_c) < neighbor_high:
+            return True
+    return False
 
-    for i in range(2, len(df) - 2):
-        # swing high
-        if df["high"][i] > df["high"][i-1] and df["high"][i] > df["high"][i+1]:
-            highs.append((df["timestamp"][i], df["high"][i]))
+def detect_liquidity_setup(df_m30, direction):
+    """
+    Analisa M30:
+    1. Cari Swing High/Low terakhir (Liquidity Pool).
+    2. Cek apakah ada candle (terakhir 1-3) yang melakukan 'Sweep'.
+    """
+    if df_m30 is None or len(df_m30) < 20:
+        return {"valid": False, "reason": "M30 Data Insufficient"}
 
-        # swing low
-        if df["low"][i] < df["low"][i-1] and df["low"][i] < df["low"][i+1]:
-            lows.append((df["timestamp"][i], df["low"][i]))
+    # Simple swing detection (3 candles fractal)
+    last_highs = df_m30["high"].rolling(3, center=True).max()
+    last_lows = df_m30["low"].rolling(3, center=True).min()
+    
+    # Ambil swing point yang valid (bukan NaN)
+    valid_high_val = last_highs.dropna().iloc[-5] if len(last_highs.dropna()) > 5 else df_m30["high"].max()
+    valid_low_val = last_lows.dropna().iloc[-5] if len(last_lows.dropna()) > 5 else df_m30["low"].min()
 
-    return highs[-3:], lows[-3:]   # only last 3 swings
+    # Cek Sweep di 3 candle terakhir
+    swept = False
+    recent_candles = df_m30.tail(3).to_dict('records')
+    
+    for candle in recent_candles:
+        if _is_sweep(candle, valid_high_val, valid_low_val, direction):
+            swept = True
+            break
+            
+    # Sesuai rule: M30 Liquidity Swept + Setup Confirmed (Kita anggap sweep = setup trigger)
+    if swept:
+        return {"valid": True, "detail": "Liquidity Sweep Detected"}
+    
+    # Relaxed rule: Jika tidak ada sweep, cek apakah harga Reclaim VWAP/EMA?
+    # Untuk strictness sesuai prompt, kita return False jika tidak ada liquidity event
+    return {"valid": False, "reason": "No M30 Liquidity Sweep Found"}
 
 
-def detect_microstructure(symbol: str):
-    df = fetch_market_data(symbol, "15m")
-    if df is None or len(df) < 50:
-        return {
-            "signal": "NONE",
-            "reason": "insufficient data"
-        }
+def detect_m15_execution(df_m15, direction):
+    """
+    Analisa M15 (Execution):
+    1. Candle Impulsif searah.
+    2. Volume > Vol_MA20.
+    """
+    if df_m15 is None or len(df_m15) < 20:
+        return {"valid": False, "reason": "M15 Data Insufficient"}
 
-    highs, lows = _find_swings(df)
-    if not highs or not lows:
-        return {"signal": "NONE", "reason": "no swings"}
-
-    last_price = df["close"].iloc[-1]
-
-    last_high = highs[-1][1]
-    prev_high = highs[-2][1] if len(highs) >= 2 else None
-
-    last_low = lows[-1][1]
-    prev_low = lows[-2][1] if len(lows) >= 2 else None
-
-    # -------------------------------
-    # BOS Detection
-    # -------------------------------
-    if prev_high and last_price > prev_high:
-        return {
-            "signal": "BOS_UP",
-            "last_swing_high": last_high,
-            "last_swing_low": last_low
-        }
-
-    if prev_low and last_price < prev_low:
-        return {
-            "signal": "BOS_DOWN",
-            "last_swing_high": last_high,
-            "last_swing_low": last_low
-        }
-
-    # -------------------------------
-    # CHOCH Detection (trend flip)
-    # -------------------------------
-    # bullish choch = break previous low then break previous high
-    if prev_low and prev_high:
-        if last_price < prev_low and last_price > prev_high:
-            return {
-                "signal": "CHOCH_UP",
-                "last_swing_high": last_high,
-                "last_swing_low": last_low
-            }
-
-        if last_price > prev_high and last_price < prev_low:
-            return {
-                "signal": "CHOCH_DOWN",
-                "last_swing_high": last_high,
-                "last_swing_low": last_low
-            }
-
-    # default
-    return {
-        "signal": "NONE",
-        "last_swing_high": last_high,
-        "last_swing_low": last_low
-    }
+    last = df_m15.iloc[-1]
+    
+    # 1. Volume Confirmation
+    vol_valid = last["volume"] > last.get("Vol_MA20", 0)
+    
+    # 2. Momentum / Impulse Check
+    is_bullish = last["close"] > last["open"]
+    body = abs(last["close"] - last["open"])
+    wick_total = (last["high"] - last["low"]) - body
+    is_impulse = body > wick_total # Body lebih besar dari ekor (strong candle)
+    
+    momentum_valid = False
+    if direction == "LONG" and is_bullish and is_impulse:
+        momentum_valid = True
+    elif direction == "SHORT" and not is_bullish and is_impulse:
+        momentum_valid = True
+        
+    if not momentum_valid:
+        return {"valid": False, "reason": "M15 Low Momentum / Indecision Candle"}
+        
+    if not vol_valid:
+        return {"valid": False, "reason": "M15 Low Volume (< Avg)"}
+        
+    return {"valid": True, "detail": "Impulse + Vol Confirmed"}
