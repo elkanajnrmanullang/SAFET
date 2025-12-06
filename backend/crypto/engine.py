@@ -4,10 +4,10 @@ H4 Trend -> H1 Bias -> Fundamental -> M30 Setup -> M15 Trigger
 """
 
 from typing import Any, Dict, List, Optional
-from backend.crypto_data import evaluate_technical
-from backend.mini_choch import detect_liquidity_setup, detect_m15_execution
-from backend.fundamental import FundamentalEngine
-from backend.risk_engine import RiskEngine
+from backend.crypto.data import evaluate_technical
+from backend.crypto.structure import detect_liquidity_setup, detect_m15_execution
+from backend.analytics.fundamental import FundamentalEngine
+from backend.analytics.risk import RiskEngine
 from backend.blackout import EventBlackout
 from backend import anomaly_detection
 

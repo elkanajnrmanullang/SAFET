@@ -3,7 +3,7 @@ import pandas as pd
 import pandas_ta as ta
 import numpy as np
 
-from backend.indicators import (
+from backend.analytics.indicators import (
     apply_indicators_by_tf,
     compute_atr,
     compute_trend_structure

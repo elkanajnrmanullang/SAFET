@@ -27,10 +27,10 @@ from backend.performance_monitor import perf_monitor
 # =============================
 # Existing Modules
 # =============================
-from backend.crypto_data import build_ai_context, evaluate_technical
+from backend.crypto.data import build_ai_context, evaluate_technical
 from backend.vision_pattern import detect_all_patterns
-from backend.mini_choch import detect_microstructure
-from backend.risk_engine import compute_risk
+from backend.crypto.structure import detect_microstructure
+from backend.analytics.risk import compute_risk
 from backend.hedge_engine import hedge_decision
 from backend.explainability import build_explanation
 from backend.reinforcement_loop import rl_post_trade_update
