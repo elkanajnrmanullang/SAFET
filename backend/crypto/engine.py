@@ -4,12 +4,14 @@ H4 Trend -> H1 Bias -> Fundamental -> M30 Setup -> M15 Trigger
 """
 
 from typing import Any, Dict, List, Optional
-from backend.crypto.data import evaluate_technical
+
+# --- PERBAIKAN DI SINI (Tambah evaluate_technical) ---
+from backend.crypto.data import build_ai_context, evaluate_technical
 from backend.crypto.structure import detect_liquidity_setup, detect_m15_execution
 from backend.analytics.fundamental import FundamentalEngine
 from backend.analytics.risk import RiskEngine
-from backend.blackout import EventBlackout
-from backend import anomaly_detection
+from backend.core.blackout import EventBlackout
+from backend.analytics.anomaly import detect_anomaly
 
 DEFAULT_RISK_FULL = 0.01 
 DEFAULT_RISK_REDUCED = 0.005 
@@ -29,7 +31,9 @@ def final_decision(
     # ------------------------------------------------------
     # STEP 1: H4 Anchor & H1 Bias (Technical Audit)
     # ------------------------------------------------------
+    # Fungsi ini sekarang sudah dikenali karena sudah di-import
     tech_audit = evaluate_technical(technical_data)
+    
     if not tech_audit.get("valid", False):
         return {
             "status": "NO_TRADE", 
@@ -93,7 +97,8 @@ def final_decision(
     # ------------------------------------------------------
     # STEP 6: Risk & Anomaly Final Check
     # ------------------------------------------------------
-    anomaly = anomaly_detection.detect_anomaly(df_m15)
+    # Pastikan file backend/analytics/anomaly.py sudah ada (dari rename anomaly_detection.py)
+    anomaly = detect_anomaly(df_m15)
     if anomaly["anomaly"]:
         severity = anomaly["severity"]
         if severity >= 0.95:
@@ -115,7 +120,6 @@ def final_decision(
         "notes": notes
     }
 
-# (Fungsi wrapper run_ai_pipeline tetap sama, tidak perlu diubah)
 def run_ai_pipeline(technical_data, fundamental_signals, equity, entry_price, context_meta=None):
     atr = float(context_meta.get("atr", technical_data.get("atr", 0.0001)))
     return final_decision(technical_data, fundamental_signals, equity, atr, entry_price, context_meta)

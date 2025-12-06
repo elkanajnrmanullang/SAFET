@@ -1,13 +1,13 @@
 import streamlit as st
 import pandas as pd
-import json
 import time
 
 # =============================
-# BACKEND IMPORT
+# IMPORTS (MODULAR STRUCTURE)
 # =============================
-from backend.crypto.data import build_ai_context
+from backend.crypto.data import build_ai_context, get_top_symbols
 from backend.crypto.engine import final_decision
+from backend.crypto.screener import CryptoScreener
 from backend.core.news import get_crypto_news
 
 # =============================
@@ -20,284 +20,282 @@ st.set_page_config(
 )
 
 # =============================
-# GLOBAL STYLE
+# STYLING
 # =============================
 st.markdown("""
 <style>
-/* Card Styling */
-.metric-card {
-    background-color: #1e293b;
-    border: 1px solid #334155;
-    border-radius: 8px;
-    padding: 15px;
-    margin-bottom: 10px;
-}
-.metric-title {
-    font-size: 0.85rem;
-    color: #94a3b8;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    margin-bottom: 5px;
-}
-.metric-value {
-    font-size: 1.2rem;
-    font-weight: 700;
-    color: #f8fafc;
-}
-.metric-sub {
-    font-size: 0.8rem;
-    margin-top: 5px;
-}
-
-/* Status Colors */
-.status-green { color: #10b981 !important; }
-.status-red { color: #ef4444 !important; }
-.status-yellow { color: #f59e0b !important; }
-
-/* Audit Steps */
-.step-container {
-    display: flex;
-    margin-bottom: 12px;
-    background: #0f172a;
-    padding: 12px;
-    border-radius: 8px;
-    border-left: 4px solid #334155;
-}
-.step-icon { font-size: 1.5rem; margin-right: 15px; }
-.step-content { flex-grow: 1; }
-.step-header { font-weight: bold; color: #e2e8f0; }
-.step-desc { font-size: 0.9rem; color: #cbd5e1; }
-
+    .card-container {
+        background-color: #1e293b;
+        border: 1px solid #334155;
+        border-radius: 10px;
+        padding: 20px;
+        margin-bottom: 20px;
+    }
+    .header-pass { border-left: 5px solid #10b981; }
+    .header-fail { border-left: 5px solid #ef4444; }
+    .header-wait { border-left: 5px solid #f59e0b; }
+    
+    .sub-section { margin-top: 15px; border-top: 1px solid #334155; padding-top: 10px; }
+    .sub-title { font-size: 0.9rem; font-weight: bold; color: #6366f1; margin-bottom: 8px; }
+    
+    .check-pass { color: #10b981; font-weight: bold; }
+    .check-fail { color: #ef4444; font-weight: bold; }
+    
+    .logic-box { background: #0f172a; padding: 10px; border-radius: 6px; font-size: 0.85rem; margin-bottom: 5px; height: 100%; }
+    
+    /* Terminal Log Style */
+    .terminal-log {
+        background-color: #0f172a;
+        color: #10b981;
+        font-family: 'Courier New', monospace;
+        padding: 10px;
+        border-radius: 5px;
+        border: 1px solid #334155;
+        height: 150px;
+        overflow-y: auto;
+        font-size: 0.8rem;
+        margin-bottom: 20px;
+    }
 </style>
 """, unsafe_allow_html=True)
 
 # =============================
-# SIDEBAR
+# HELPER: RENDER CARD
 # =============================
-with st.sidebar:
-    st.header("🎛️ Control Panel")
-    symbol = st.text_input("Symbol", "BTC/USDT").upper()
-    
-    with st.expander("⚙️ Parameter Simulasi"):
-        equity = st.number_input("Equity ($)", value=1000.0)
-        entry_price = st.number_input("Entry Price (Optional)", value=0.0)
-    
-    st.info("💡 **Mode Super Analyst:** Sistem akan menampilkan detail setiap timeframe meskipun keputusan akhirnya No Trade.")
-    
-    run_btn = st.button("🚀 RUN ANALYST", type="primary")
-
-# =============================
-# HELPER FUNCTIONS
-# =============================
-def render_step(title, status, detail, sub_detail=None):
-    """Visualisasi Step Waterfall"""
-    if status == "PASS":
-        border_color = "#10b981" # Green
-        icon = "✅"
-    elif status == "FAIL":
-        border_color = "#ef4444" # Red
+def render_analysis_card(symbol, screener_res, decision=None, technical_ctx=None):
+    if screener_res["status"] == "FAIL":
+        status_color = "header-fail"
+        main_status = "REJECTED (SCREENING)"
         icon = "⛔"
+    elif decision and decision["status"] == "EXECUTE":
+        status_color = "header-pass"
+        main_status = "EXECUTE SIGNAL"
+        icon = "💎"
     else:
-        border_color = "#64748b" # Grey/Skip
-        icon = "⏭️"
-        
+        status_color = "header-wait"
+        main_status = "NO TRADE (WAIT)"
+        icon = "⏳"
+
     st.markdown(f"""
-    <div class="step-container" style="border-left-color: {border_color};">
-        <div class="step-icon">{icon}</div>
-        <div class="step-content">
-            <div class="step-header">{title}</div>
-            <div class="step-desc">{detail}</div>
-            {f'<div class="metric-sub" style="color:#94a3b8">{sub_detail}</div>' if sub_detail else ''}
+    <div class="card-container {status_color}">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+            <h2 style="margin:0; color: #f8fafc;">{icon} {symbol}</h2>
+            <h3 style="margin:0; color: #cbd5e1;">{main_status}</h3>
         </div>
-    </div>
     """, unsafe_allow_html=True)
 
-# =============================
-# MAIN APP
-# =============================
-st.title("AltaQuant • Super Analyst Dashboard")
-st.caption("Institutional Waterfall Analysis: H4 ➡️ H1 ➡️ M30 ➡️ M15")
+    st.markdown('<div class="sub-section"><div class="sub-title">TAHAP 0 — SCREENING RULES</div>', unsafe_allow_html=True)
+    s_cols = st.columns(4)
+    details = screener_res["details"]
+    def c(val): return "check-pass" if "PASS" in val else "check-fail"
 
-if run_btn:
-    # --- PHASE 1: GATHERING DATA ---
-    with st.status("🔍 Scanning Market Structure...", expanded=True) as status:
-        st.write("1️⃣ Fetching Fundamental & Sentiment...")
-        news_text = get_crypto_news(symbol)
-        fund_signals = [{"keyword": news_text, "impact": "medium"}]
-        
-        st.write("2️⃣ Downloading Multi-Timeframe Data (H4, H1, M30, M15)...")
-        ctx = build_ai_context(symbol)
-        
-        if ctx is None:
-            status.update(label="❌ Data Fetch Failed! Check Symbol or Connection.", state="error")
-            st.stop()
-            
-        st.write("3️⃣ Running AI Decision Engine...")
-        
-        # Prepare params
-        atr_val = ctx.get("atr", 0.0)
-        current_price = ctx.get("price", 0.0)
-        use_entry = entry_price if entry_price > 0 else current_price
-        
-        decision = final_decision(
-            technical_data=ctx,
-            fundamental_signals=fund_signals,
-            equity=equity,
-            atr=atr_val,
-            entry_price=use_entry
-        )
-        
-        status.update(label="✅ Analysis Complete", state="complete")
-
-    # --- PHASE 2: DASHBOARD DISPLAY ---
+    s_cols[0].markdown(f"**Volume:** <br><span class='{c(details.get('Volume',''))}'>{details.get('Volume','-')}</span>", unsafe_allow_html=True)
+    s_cols[1].markdown(f"**Volatility:** <br><span class='{c(details.get('Volatility',''))}'>{details.get('Volatility','-')}</span>", unsafe_allow_html=True)
+    s_cols[2].markdown(f"**Structure:** <br><span class='{c(details.get('Structure',''))}'>{details.get('Structure','-')}</span>", unsafe_allow_html=True)
+    s_cols[3].markdown(f"**Trend Pot:** <br><span class='{c(details.get('Trend_Potential',''))}'>{details.get('Trend_Potential','-')}</span>", unsafe_allow_html=True)
     
-    # 1. TOP LEVEL DECISION
-    final_status = decision.get("status")
-    direction = decision.get("direction")
-    confidence = decision.get("confidence", 0) * 100
-    
-    # Determine Color
-    if final_status == "EXECUTE":
-        main_color = "status-green"
-        bg_callout = "rgba(16, 185, 129, 0.1)"
-    elif final_status in ["NO_TRADE", "BLOCKED_BY_FUNDAMENTAL"]:
-        main_color = "status-red"
-        bg_callout = "rgba(239, 68, 68, 0.1)"
-    else:
-        main_color = "status-yellow"
-        bg_callout = "rgba(245, 158, 11, 0.1)"
+    if screener_res["status"] == "FAIL":
+        reasons = ", ".join(screener_res.get("reasons", []))
+        st.error(f"❌ **Reason:** {reasons}")
+        st.markdown("</div>", unsafe_allow_html=True) 
+        return
 
-    st.markdown(f"""
-    <div style="background: {bg_callout}; padding: 20px; border-radius: 12px; border: 1px solid currentColor; margin-bottom: 25px; text-align: center;">
-        <h2 style="margin:0; font-size: 2.5rem;" class="{main_color}">{final_status}</h2>
-        <p style="margin:5px 0 0 0; font-size: 1.1rem; opacity: 0.8;">
-            Direction: <strong>{direction}</strong> • Confidence: <strong>{confidence:.1f}%</strong>
-        </p>
-    </div>
-    """, unsafe_allow_html=True)
-
-    # 2. SPLIT VIEW: RAW DATA vs LOGIC FLOW
-    tab1, tab2, tab3 = st.tabs(["🌊 Waterfall Analysis (Logic)", "📊 Market Context (Raw Data)", "🛡️ Fundamental & News"])
-    
-    with tab1:
-        st.subheader("Kenapa Hasilnya Demikian?")
-        st.caption("Sistem mengecek aturan secara berurutan. Jika satu langkah gagal (⛔), langkah berikutnya di-skip.")
-        
-        # --- EXTRACT LOGIC STATUS ---
-        # Note: Kita ambil data raw dari ctx untuk menampilkan "Alasan" meskipun engine sudah stop
-        
-        # STEP 1: H4
-        h4 = ctx.get("trend_h4", {})
-        h4_pass = h4.get("valid", False)
-        h4_detail = f"Trend: {h4.get('direction')} | ADX: {h4.get('adx', 0):.2f}"
-        render_step(
-            "STEP 1: H4 Major Trend (Anchor)",
-            "PASS" if h4_pass else "FAIL",
-            f"Status: {'VALID' if h4_pass else 'INVALID'}",
-            h4_detail
-        )
-        
-        # STEP 2: H1
-        h1 = ctx.get("bias_h1", {})
-        h1_aligned = h1.get("aligned", False)
-        h1_detail = h1.get("reason", "N/A")
-        
-        # H1 Logic: Hanya relevan jika H4 Pass
-        if h4_pass:
-            render_step(
-                "STEP 2: H1 Bias Confirmation",
-                "PASS" if h1_aligned else "FAIL",
-                f"Status: {'ALIGNED' if h1_aligned else 'DIVERGENCE'}",
-                h1_detail
-            )
-        else:
-            render_step("STEP 2: H1 Bias Confirmation", "SKIP", "Skipped karena H4 Invalid")
-
-        # STEP 3: M30
-        # Cek notes dari decision untuk melihat apakah M30 dicek
-        notes = decision.get("notes", [])
-        m30_note = next((n for n in notes if "M30" in n), None)
-        
-        if h4_pass and h1_aligned:
-            # Jika M30 note ada dan positif (tidak ada kata Failed)
-            m30_pass = m30_note and "Failed" not in m30_note
-            render_step(
-                "STEP 3: M30 Liquidity Setup",
-                "PASS" if m30_pass else "FAIL",
-                m30_note if m30_note else "No Liquidity Sweep Detected",
-                "Mencari: Liquidity Sweep (Wick) + Reclaim Area"
-            )
-        else:
-             render_step("STEP 3: M30 Liquidity Setup", "SKIP", "Skipped karena struktur makro (H4/H1) belum valid")
-
-        # STEP 4: M15
-        m15_note = next((n for n in notes if "M15" in n), None)
-        if h4_pass and h1_aligned and m30_note and "Failed" not in m30_note:
-            m15_pass = m15_note and "Failed" not in m15_note
-            render_step(
-                "STEP 4: M15 Execution Trigger",
-                "PASS" if m15_pass else "FAIL",
-                m15_note if m15_note else "Momentum/Volume belum valid",
-                "Syarat: Candle Impulsif + Volume > MA20"
-            )
-        else:
-             render_step("STEP 4: M15 Execution Trigger", "SKIP", "Menunggu Setup M30 Valid")
-
-    with tab2:
-        st.subheader("Indikator & Angka Mentah")
-        
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-            st.markdown('<div class="metric-title">Price & ATR</div>', unsafe_allow_html=True)
-            st.markdown(f'<div class="metric-value">${current_price:,.2f}</div>', unsafe_allow_html=True)
-            st.markdown(f'<div class="metric-sub">ATR (15m): {atr_val:.2f}</div>', unsafe_allow_html=True)
-            st.markdown('</div>', unsafe_allow_html=True)
-            
-        with c2:
-            h4_dir = ctx.get("trend_h4", {}).get("direction", "-")
-            h4_adx = ctx.get("trend_h4", {}).get("adx", 0)
-            adx_color = "status-green" if h4_adx >= 20 else "status-red"
-            
-            st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-            st.markdown('<div class="metric-title">H4 Strength</div>', unsafe_allow_html=True)
-            st.markdown(f'<div class="metric-value">{h4_dir}</div>', unsafe_allow_html=True)
-            st.markdown(f'<div class="metric-sub {adx_color}">ADX: {h4_adx:.2f} (Threshold: 20)</div>', unsafe_allow_html=True)
-            st.markdown('</div>', unsafe_allow_html=True)
-            
-        with c3:
-            h1_status = "✅ Aligned" if ctx.get("bias_h1", {}).get("aligned") else "⚠️ Divergence"
-            st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-            st.markdown('<div class="metric-title">H1 Bias</div>', unsafe_allow_html=True)
-            st.markdown(f'<div class="metric-value">{h1_status}</div>', unsafe_allow_html=True)
-            st.markdown('<div class="metric-sub">Price vs EMA50 Relation</div>', unsafe_allow_html=True)
-            st.markdown('</div>', unsafe_allow_html=True)
-
-        st.info("ℹ️ **Cara Baca:** Jika ADX < 20, Market sedang *Choppy*/Sideways. Trend Following akan sering gagal. Sistem otomatis skip.")
-
-    with tab3:
-        st.subheader("Fundamental Intelligence")
-        
+    if decision and technical_ctx:
+        st.markdown('<div class="sub-section"><div class="sub-title">TAHAP 1 — WATERFALL ANALYSIS</div>', unsafe_allow_html=True)
         fund = decision.get("fundamental", {})
-        flag = fund.get("flag", "GREY")
+        fund_flag = fund.get("flag", "GREEN")
+        f_color = "check-fail" if fund_flag == "RED" else ("check-pass" if fund_flag == "GREEN" else "check-wait")
+        st.markdown(f"**Fundamental Guard:** <span class='{f_color}'>{fund_flag}</span> <span style='font-size:0.8em'>({fund.get('reason', ['-'])[0]})</span>", unsafe_allow_html=True)
         
-        if flag == "RED":
-            st.error(f"🛑 CRITICAL BLOCK: {fund.get('reason')}")
-        elif flag == "YELLOW":
-            st.warning(f"⚠️ WARNING (Reduce Size): {fund.get('reason')}")
-        else:
-            st.success("✅ Fundamental Clean / Neutral")
-            
-        with st.expander("📄 Baca Berita Raw (Sumber Analisa)", expanded=True):
-            st.write(news_text)
+        col_h4, col_h1, col_m30, col_m15 = st.columns(4)
+        h4 = technical_ctx.get("trend_h4", {})
+        col_h4.markdown(f"""<div class="logic-box" style="border-left:3px solid {'#10b981' if h4.get('valid') else '#ef4444'}"><strong>TF H4 (Anchor)</strong><br>Dir: {h4.get('direction')}<br>ADX: {h4.get('adx',0):.1f}</div>""", unsafe_allow_html=True)
+        
+        h1 = technical_ctx.get("bias_h1", {})
+        col_h1.markdown(f"""<div class="logic-box" style="border-left:3px solid {'#10b981' if h1.get('aligned') else '#ef4444'}"><strong>TF H1 (Bias)</strong><br>{'Aligned' if h1.get('aligned') else 'Divergence'}</div>""", unsafe_allow_html=True)
+        
+        notes = decision.get("notes", [])
+        m30_note = next((n for n in notes if "M30" in n), "Skipped")
+        m30_ok = "Failed" not in m30_note and "Skipped" not in m30_note
+        col_m30.markdown(f"""<div class="logic-box" style="border-left:3px solid {'#10b981' if m30_ok else '#64748b'}"><strong>TF M30 (Setup)</strong><br>{m30_note}</div>""", unsafe_allow_html=True)
+        
+        m15_note = next((n for n in notes if "M15" in n), "Skipped")
+        m15_ok = "Confirmed" in m15_note
+        col_m15.markdown(f"""<div class="logic-box" style="border-left:3px solid {'#10b981' if m15_ok else '#64748b'}"><strong>TF M15 (Exec)</strong><br>{m15_note}</div>""", unsafe_allow_html=True)
 
-    # 3. RISK CALCULATION (If Executable)
-    if final_status == "EXECUTE":
-        st.divider()
-        st.subheader("🎯 Trade Plan (Execution)")
-        risk = decision.get("risk", {})
+        if decision["status"] == "EXECUTE":
+            st.markdown('<div class="sub-section"><div class="sub-title">🎯 EXECUTION PLAN</div>', unsafe_allow_html=True)
+            risk = decision.get("risk", {})
+            r1, r2, r3 = st.columns(3)
+            r1.metric("Direction", decision.get("direction"))
+            r2.metric("Stop Loss", f"${risk.get('stop_loss'):,.4f}")
+            r3.metric("Take Profit", f"${risk.get('take_profit'):,.4f}")
+            st.success(f"Position Size: {risk.get('position_size')} Units (Confidence: {decision.get('confidence')*100:.0f}%)")
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+# =============================
+# MAIN APP LOGIC
+# =============================
+st.title("AltaQuant • Institutional Grade DSS")
+st.markdown("Automated Screening & Waterfall Analysis System")
+
+screener = CryptoScreener()
+
+with st.sidebar:
+    st.title("🛡️ AltaQuant Control")
+    mode = st.radio("Mode Operasi", ["Market Scanner (Auto)", "Single Analyzer"])
+    
+    if mode == "Single Analyzer":
+        symbol = st.text_input("Symbol", "BTC/USDT").upper()
+        equity = st.number_input("Equity ($)", 1000.0)
+        run_btn = st.button("🚀 START ANALYSIS", type="primary")
+    else:
+        st.info("Scanner akan memindai Top 50 Volume Koin. Scanner otomatis BERHENTI setelah menemukan 3 Setup Valid.")
+        run_scan = st.button("🔍 SCAN MARKET HUNTER", type="primary")
+
+# ----------------------------------------
+# MODE 1: MARKET SCANNER (AUTO HUNTER)
+# ----------------------------------------
+if mode == "Market Scanner":
+    if run_scan:
+        st.header("🔍 Market Hunter Results")
         
-        rc1, rc2, rc3 = st.columns(3)
-        rc1.success(f"**STOP LOSS:** {risk.get('stop_loss')}")
-        rc2.info(f"**TAKE PROFIT:** {risk.get('take_profit')}")
-        rc3.warning(f"**SIZE:** {risk.get('position_size')} Units")
+        # Area Log
+        log_placeholder = st.empty()
+        logs = []
+
+        def add_log(msg):
+            logs.insert(0, f"> {msg}")
+            # Tampilkan 8 baris terakhir
+            log_text = "\n".join(logs[:8])
+            log_placeholder.markdown(f"```bash\n{log_text}\n```")
+
+        # 1. Fetch Top Symbols
+        with st.status("📡 Initializing Scanner...", expanded=True) as status:
+            add_log("Connecting to Binance Futures API...")
+            try:
+                # Mengambil data dengan batasan limit 50
+                symbols = get_top_symbols(limit=50)
+            except Exception as e:
+                symbols = []
+            
+            # --- PENGECEKAN KONEKSI ---
+            if not symbols:
+                status.update(label="❌ CONNECTION FAILED!", state="error")
+                st.error("Gagal terhubung ke Exchange! Tidak ada data simbol yang diterima.")
+                st.warning("⚠️ **Solusi:** Aktifkan VPN Anda sekarang (Binance diblokir di Indonesia) dan coba lagi.")
+                st.stop() # Berhenti di sini
+            # ---------------------------
+
+            add_log(f"Connection Success. Found {len(symbols)} active markets.")
+            st.write(f"Didapat {len(symbols)} koin aktif. Memulai Hunting...")
+            
+            found_candidates = []
+            progress_bar = st.progress(0)
+            
+            # 2. Scanning Loop
+            for i, sym in enumerate(symbols):
+                # STOP CONDITION
+                if len(found_candidates) >= 3:
+                    add_log("[STOP] Target 3 Candidates Found.")
+                    break
+                
+                # Update Progress
+                progress_bar.progress((i + 1) / len(symbols))
+                
+                # A. Screening Tahap 0
+                add_log(f"Scanning {sym} ({i+1}/{len(symbols)})...")
+                dummy_fund = [{"keyword": "neutral", "impact": "medium"}]
+                
+                # Jalankan Screener
+                try:
+                    screen_res = screener.run_screen(sym, dummy_fund)
+                except Exception as e:
+                    add_log(f"Error screening {sym}: {e}")
+                    continue
+
+                if screen_res["status"] == "FAIL":
+                    reason = screen_res['reasons'][0] if screen_res['reasons'] else "Unknown"
+                    add_log(f"   [X] REJECTED: {reason}")
+                    continue 
+                
+                # B. Deep Analysis
+                add_log(f"   [!] PASSED SCREEN. Deep Analyzing...")
+                ctx = build_ai_context(sym)
+                if not ctx: 
+                    add_log("   [!] Error: Context Build Failed")
+                    continue
+                
+                decision = final_decision(
+                    technical_data=ctx,
+                    fundamental_signals=dummy_fund,
+                    equity=1000,
+                    atr=ctx.get("atr", 0),
+                    entry_price=ctx.get("price", 0)
+                )
+                
+                # C. Check Result
+                if decision["status"] == "EXECUTE":
+                    add_log(f"   💎 DIAMOND FOUND! {decision['direction']}")
+                    found_candidates.append({
+                        "symbol": sym,
+                        "screen": screen_res,
+                        "decision": decision,
+                        "ctx": ctx
+                    })
+                else:
+                    status_reason = decision.get("status", "NO_TRADE")
+                    if decision.get("notes"):
+                        # Ambil note terakhir sebagai alasan singkat
+                        status_reason += f" ({decision['notes'][-1]})"
+                    add_log(f"   [O] NO TRADE: {status_reason}")
+                    
+            progress_bar.empty()
+            status.update(label="✅ Hunting Complete", state="complete")
+            
+        # 3. Display Results
+        if not found_candidates:
+            st.warning("⚠️ Market Hunter selesai. Tidak ada koin yang memenuhi kriteria 'Super Analyst'.")
+            st.info("Tips: Market mungkin sedang 'Choppy' atau Sideways parah. Coba lagi nanti.")
+        else:
+            st.success(f"💎 Ditemukan {len(found_candidates)} Setup Valid!")
+            for cand in found_candidates:
+                render_analysis_card(
+                    cand['symbol'], 
+                    cand['screen'], 
+                    cand['decision'], 
+                    cand['ctx']
+                )
+
+# ----------------------------------------
+# MODE 2: SINGLE ANALYZER
+# ----------------------------------------
+elif mode == "Single Analyzer":
+    if run_btn:
+        st.header(f"Deep Analysis: {symbol}")
+        
+        with st.spinner("Analysing..."):
+            news = get_crypto_news(symbol)
+            fund_signals = [{"keyword": news, "impact": "medium"}]
+            
+            screen_res = screener.run_screen(symbol, fund_signals)
+            
+            decision = None
+            ctx = None
+            
+            if screen_res["status"] == "PASS":
+                ctx = build_ai_context(symbol)
+                if ctx:
+                    decision = final_decision(
+                        technical_data=ctx,
+                        fundamental_signals=fund_signals,
+                        equity=equity,
+                        atr=ctx.get("atr", 0),
+                        entry_price=ctx.get("price", 0)
+                    )
+            
+            render_analysis_card(symbol, screen_res, decision, ctx)
+            
+            with st.expander("📄 Read News Context"):
+                st.write(news)
