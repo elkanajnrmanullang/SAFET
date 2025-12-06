@@ -76,16 +76,16 @@ class CryptoScreener:
             checks["Volatility"] = f"PASS ({atr_now:.2f}%)"
 
         # ====================================================
-        # RULE 2: LIQUIDITY (Volume USDT)
+        # RULE 2: Volume (Volume USDT)
         # ====================================================
         # Kita pakai threshold misal $500,000 per jam rata-rata
         min_usdt_vol = 500_000 
         
         if vol_usdt < min_usdt_vol:
-            checks["Liquidity"] = "FAIL"
+            checks["Volume"] = "FAIL"
             fail_reasons.append(f"Low Volume (${vol_usdt/1000:.0f}k < $500k)")
         else:
-            checks["Liquidity"] = "PASS"
+            checks["Volume"] = "PASS"
             
         # ====================================================
         # RULE 3: TREND PRE-FILTER (ADX)

@@ -28,7 +28,7 @@ def get_crypto_news(symbol, limit=5):
         
         url = f"{BASE_URL}?auth_token={API_KEY}&currencies={coin_symbol}&filter=rising&public=true"
         
-        response = requests.get(url, headers=headers, timeout=5)
+        response = requests.get(url, headers=headers, timeout=15)
         
         # Cek Status Code
         if response.status_code != 200:

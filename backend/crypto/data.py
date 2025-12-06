@@ -14,9 +14,15 @@ from backend.analytics.indicators import (
 #  CONNECTION
 # ================================================================
 def get_exchange():
+    """
+    Inisialisasi koneksi CCXT.
+    PENTING: Pastikan VPN aktif atau gunakan Proxy jika di Indonesia.
+    """
     return ccxt.binance({
         "enableRateLimit": True,
-        "options": {"defaultType": "future"}
+        "options": {"defaultType": "future"},
+        # Tambahkan timeout agar tidak hang terlalu lama jika diblokir
+        "timeout": 10000,  # 10 detik
     })
 
 def fetch_market_data(symbol, timeframe, limit=500):
@@ -28,7 +34,12 @@ def fetch_market_data(symbol, timeframe, limit=500):
             if "/" not in symbol else symbol.upper()
         )
         
+        # Coba ambil data
         ohlcv = exc.fetch_ohlcv(safe_symbol, timeframe, limit=limit)
+    
+    except ccxt.NetworkError as e:
+        print(f"NETWORK ERROR ({symbol}): Koneksi ke Binance gagal. Cek VPN! ({str(e)})")
+        return None
     except Exception as e:
         print(f"FETCH ERROR ({symbol} - {timeframe}): {str(e)}")
         return None
@@ -52,6 +63,7 @@ def get_top_symbols(limit=50):
     """
     exc = get_exchange()
     try:
+        # Load markets membutuhkan koneksi stabil
         exc.load_markets()
         tickers = exc.fetch_tickers()
         
@@ -71,10 +83,14 @@ def get_top_symbols(limit=50):
             
         return top_list
 
+    except ccxt.NetworkError:
+        print("CRITICAL: Network Error saat mengambil Top Symbols. Pastikan VPN ON.")
+        return []
     except Exception as e:
         print(f"CRITICAL: Gagal mengambil Top Symbols dari Binance. Error: {e}")
         return []
 
+# ... (Sisa fungsi indikator dan evaluate_technical biarkan sama) ...
 # ================================================================
 #  INDICATOR WRAPPER
 # ================================================================
@@ -83,9 +99,6 @@ def apply_indicators(df, tf):
         return None
     return apply_indicators_by_tf(df, tf)
 
-# ================================================================
-#  1. H4 ANALYZER (ANCHOR)
-# ================================================================
 def detect_trend_h4(df):
     if df is None or len(df) < 200:
         return {"valid": False, "direction": "NEUTRAL", "adx": 0}
@@ -110,9 +123,6 @@ def detect_trend_h4(df):
         "reason": f"H4 EMA Alignment ({direction}), ADX={adx_val:.2f}"
     }
 
-# ================================================================
-#  2. H1 ANALYZER (BIAS)
-# ================================================================
 def detect_bias_h1(df, h4_direction):
     if df is None or df.empty:
         return {"aligned": False, "reason": "No Data"}
@@ -132,15 +142,12 @@ def detect_bias_h1(df, h4_direction):
         "reason": "H1 Price vs EMA50 Agreement" if aligned else "H1 Divergence"
     }
 
-# ================================================================
-#  CONTEXT BUILDER (CORE)
-# ================================================================
 def build_ai_context(symbol: str, user_chart_context: str | None = None):
     # Fetch Data
-    df_h4 = fetch_market_data(symbol, "4h", limit=300)
-    df_h1 = fetch_market_data(symbol, "1h", limit=100)
-    df_m30 = fetch_market_data(symbol, "30m", limit=100)
-    df_m15 = fetch_market_data(symbol, "15m", limit=100)
+    df_h4 = fetch_market_data(symbol, "4h", limit=500)
+    df_h1 = fetch_market_data(symbol, "1h", limit=500)
+    df_m30 = fetch_market_data(symbol, "30m", limit=500)
+    df_m15 = fetch_market_data(symbol, "15m", limit=500)
 
     # Apply Indicators
     df_h4 = apply_indicators(df_h4, "4h")
@@ -170,18 +177,10 @@ def build_ai_context(symbol: str, user_chart_context: str | None = None):
     }
     return context
 
-# ================================================================
-#  TECHNICAL EVALUATOR (Fungsi yang sebelumnya Hilang)
-# ================================================================
 def evaluate_technical(data):
-    """
-    Validasi Tahap 1 (H4) & Tahap 2 (H1) sebelum masuk ke detail M30/M15.
-    Dipanggil oleh engine.final_decision.
-    """
     trend = data.get("trend_h4", {})
     bias = data.get("bias_h1", {})
 
-    # 1. H4 Must be Valid
     if not trend.get("valid"):
         return {
             "valid": False, 
@@ -190,7 +189,6 @@ def evaluate_technical(data):
 
     direction = trend["direction"]
 
-    # 2. H1 Should Confirm
     if not bias.get("aligned"):
          return {
             "valid": False, 

@@ -1,13 +1,11 @@
 """
-Core decision engine (Waterfall Logic)
-H4 Trend -> H1 Bias -> Fundamental -> M30 Setup -> M15 Trigger
+Core decision engine (Simplified 3-TF Logic)
+H4 Trend -> H1 Bias/Setup -> M15 Trigger
 """
 
 from typing import Any, Dict, List, Optional
-
-# --- PERBAIKAN DI SINI (Tambah evaluate_technical) ---
-from backend.crypto.data import build_ai_context, evaluate_technical
-from backend.crypto.structure import detect_liquidity_setup, detect_m15_execution
+from backend.crypto.data import evaluate_technical
+from backend.crypto.structure import detect_m15_execution
 from backend.analytics.fundamental import FundamentalEngine
 from backend.analytics.risk import RiskEngine
 from backend.core.blackout import EventBlackout
@@ -31,7 +29,7 @@ def final_decision(
     # ------------------------------------------------------
     # STEP 1: H4 Anchor & H1 Bias (Technical Audit)
     # ------------------------------------------------------
-    # Fungsi ini sekarang sudah dikenali karena sudah di-import
+    # Fungsi ini mengecek H4 Trend dan H1 Alignment sekaligus
     tech_audit = evaluate_technical(technical_data)
     
     if not tech_audit.get("valid", False):
@@ -42,7 +40,7 @@ def final_decision(
         }
 
     direction = tech_audit.get("direction")
-    confidence = 0.70 # Start base confidence
+    confidence = 0.75 # Start confidence lebih tinggi karena logic lebih simpel
 
     # ------------------------------------------------------
     # STEP 2: Fundamental Gatekeeper
@@ -66,23 +64,9 @@ def final_decision(
         return {"status": "EVENT_BLACKOUT", "reason": "Macro Event Window", "notes": notes}
 
     # ------------------------------------------------------
-    # STEP 4: M30 Liquidity Setup
+    # STEP 4: M15 Execution Trigger (LANGSUNG DARI H1)
     # ------------------------------------------------------
-    df_m30 = technical_data.get("df_m30")
-    m30_setup = detect_liquidity_setup(df_m30, direction)
-    
-    if not m30_setup["valid"]:
-        # Strict rule: No Liquidity Sweep = No Trade
-        return {
-            "status": "NO_TRADE", 
-            "reason": f"M30 Setup Failed: {m30_setup.get('reason')}",
-            "notes": notes
-        }
-    notes.append(f"M30: {m30_setup.get('detail')}")
-
-    # ------------------------------------------------------
-    # STEP 5: M15 Execution Trigger
-    # ------------------------------------------------------
+    # Kita SKIP M30 Liquidity Sweep. H1 dianggap sebagai Setup Location.
     df_m15 = technical_data.get("df_m15")
     m15_exec = detect_m15_execution(df_m15, direction)
     
@@ -95,9 +79,8 @@ def final_decision(
     notes.append(f"M15: {m15_exec.get('detail')}")
 
     # ------------------------------------------------------
-    # STEP 6: Risk & Anomaly Final Check
+    # STEP 5: Risk & Anomaly Final Check
     # ------------------------------------------------------
-    # Pastikan file backend/analytics/anomaly.py sudah ada (dari rename anomaly_detection.py)
     anomaly = detect_anomaly(df_m15)
     if anomaly["anomaly"]:
         severity = anomaly["severity"]
