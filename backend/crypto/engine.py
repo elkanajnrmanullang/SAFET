@@ -92,7 +92,13 @@ def final_decision(
     # Risk Sizing
     risk_pct = DEFAULT_RISK_REDUCED if fundamental.get("action") == "REDUCE_SIZE" else DEFAULT_RISK_FULL
     risk_engine = RiskEngine(equity, risk_pct)
-    risk_calc = risk_engine.calculate(entry=entry_price, atr=atr, direction=direction)
+    sr_structure = m15_exec.get("levels", {})
+    risk_calc = risk_engine.calculate(
+        entry=entry_price, 
+        atr=atr, 
+        direction=direction, 
+        structure=sr_structure
+    )
 
     return {
         "status": "EXECUTE",

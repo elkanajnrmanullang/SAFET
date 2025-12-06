@@ -114,10 +114,20 @@ def detect_m15_execution(df_m15, direction):
                  valid_trigger = True
                  detail_msg = "🚀 Momentum Impulse (Mid-Range)"
 
+    # --- RETURN RESULT WITH LEVELS ---
+    result_data = {
+        "valid": False, 
+        "reason": "No Valid Setup",
+        "levels": {"support": sup, "resistance": res}  # <--- DATA UNTUK RISK ENGINE
+    }
+
     if not valid_trigger:
-        return {"valid": False, "reason": "No Valid Setup (Wait for Breakout or Bounce)"}
+        result_data["reason"] = "No Valid Setup (Wait for Breakout or Bounce)"
+        return result_data
         
-    return {"valid": True, "detail": detail_msg}
+    result_data["valid"] = True
+    result_data["detail"] = detail_msg
+    return result_data
 
 
 # ==============================================================================

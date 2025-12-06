@@ -1,8 +1,8 @@
 """
-Risk Engine (Fixed for AltaQuant)
+Risk Engine (Structure Based)
 ---------------------------------
-Menangani perhitungan manajemen risiko, Position Sizing, dan SL/TP dinamis
-berdasarkan ATR (Average True Range).
+Menghitung SL berdasarkan Invalidation Point (Support/Resistance)
+dan memastikan Risk:Reward Ratio minimal 1:2.
 """
 
 import numpy as np
@@ -12,52 +12,68 @@ from typing import Dict, Any
 class RiskEngine:
     def __init__(self, balance: float, risk_pct: float = 0.01):
         """
-        Inisialisasi Risk Engine dengan saldo dan toleransi risiko.
-        Dipanggil oleh engine.py sebagai: risk_engine = RiskEngine(equity, risk_pct)
+        Inisialisasi Risk Engine.
         """
         self.balance = float(balance)
         self.risk_pct = float(risk_pct)
 
-    def calculate(self, entry: float, atr: float, direction: str) -> Dict[str, Any]:
+    def calculate(self, entry: float, atr: float, direction: str, structure: Dict[str, float] = None) -> Dict[str, Any]:
         """
-        Menghitung Stop Loss, Take Profit, dan Ukuran Posisi berbasis ATR.
-        Dipanggil oleh engine.py sebagai: risk_engine.calculate(...)
+        Menghitung SL/TP Strategis.
+        
+        Logic SL (Invalidation):
+        - SHORT: SL = Resistance + Buffer (Agar tidak kena stop hunt wicks)
+        - LONG:  SL = Support - Buffer
+        
+        Logic TP (Ratio):
+        - TP = Entry + (Jarak_SL * 2) -> Ratio 1:2 Fixed
         """
-        # Konfigurasi Multiplier (Risk Reward Ratio 1:2)
-        # SL = 1.5 x ATR (Cukup lebar untuk napas)
-        # TP = 3.0 x ATR (Target profit)
-        sl_multiplier = 1.5
-        tp_multiplier = 3.0
-
         entry = float(entry)
         atr = float(atr)
-
-        # Hitung Harga SL & TP berdasarkan arah
-        if direction.upper() == "LONG":
-            sl_price = entry - (atr * sl_multiplier)
-            tp_price = entry + (atr * tp_multiplier)
-        elif direction.upper() == "SHORT":
-            sl_price = entry + (atr * sl_multiplier)
-            tp_price = entry - (atr * tp_multiplier)
-        else:
-            # Fallback (Safety)
-            sl_price = entry - (atr * sl_multiplier)
-            tp_price = entry + (atr * tp_multiplier)
-
-        # Hitung Jarak SL (Distance)
-        sl_distance = abs(entry - sl_price)
         
-        # Safety Check: Hindari error pembagian nol
-        if sl_distance == 0:
-            sl_distance = entry * 0.01  # Fallback 1% dari harga entry
+        # 1. Tentukan Buffer (Napas Tambahan)
+        # Buffer menggunakan 0.5 ATR agar dinamis sesuai volatilitas saat itu
+        buffer = atr * 0.5 
 
-        # Hitung Risk Amount (Uang yang siap dirisikokan, misal $10 dari $1000)
+        # Ambil data support/resistance dari struktur market (jika ada)
+        # Jika tidak ada (fallback), gunakan ATR multiplier standar
+        sup = structure.get('support') if structure else (entry - atr * 1.5)
+        res = structure.get('resistance') if structure else (entry + atr * 1.5)
+
+        # 2. Hitung Harga Stop Loss (SL)
+        if direction.upper() == "LONG":
+            # SL di bawah Support
+            sl_price = sup - buffer
+            # Safety: Jangan sampai SL di atas harga entry (logic error)
+            if sl_price >= entry: 
+                sl_price = entry - (atr * 1.5)
+                
+        elif direction.upper() == "SHORT":
+            # SL di atas Resistance
+            sl_price = res + buffer
+            # Safety: Jangan sampai SL di bawah harga entry
+            if sl_price <= entry: 
+                sl_price = entry + (atr * 1.5)
+        else:
+            sl_price = entry - (atr * 1.5) # Fallback
+
+        # 3. Hitung Jarak Risiko (Risk Distance per Koin)
+        risk_dist = abs(entry - sl_price)
+        
+        if risk_dist == 0:
+            risk_dist = entry * 0.01 # Fallback 1% prevent division by zero
+
+        # 4. Hitung Take Profit (TP) -> TARGET RATIO 1:2
+        # Kita proyeksikan TP sejauh 2x jarak risiko
+        if direction.upper() == "LONG":
+            tp_price = entry + (risk_dist * 2.0)
+        else:
+            tp_price = entry - (risk_dist * 2.0)
+
+        # 5. Position Sizing
+        # Berapa lot yang dibeli agar jika kena SL, rugi = Risk Amount ($)
         risk_amount = self.balance * self.risk_pct
-
-        # Hitung Position Size (Unit Koin)
-        # Rumus: Risk Amount ($) / Jarak SL per koin ($)
-        # Contoh: Rela rugi $10. Jarak SL ke Entry $5. Maka beli 2 Koin.
-        position_size = risk_amount / sl_distance
+        position_size = risk_amount / risk_dist
 
         return {
             "entry": entry,
@@ -66,10 +82,11 @@ class RiskEngine:
             "position_size": round(position_size, 4),
             "risk_amount": round(risk_amount, 2),
             "atr": atr,
-            "rr_ratio": f"1:{tp_multiplier/sl_multiplier:.1f}"
+            "rr_ratio": "1:2.0 (Structure Based)",
+            "note": "SL @ Structure Invalidation"
         }
 
-    # --- Legacy Support (Opsional: Mempertahankan fungsi lama jika ada modul lain yang butuh) ---
+    # --- Legacy Support ---
     def calc_volatility(self, df: pd.DataFrame) -> float:
         returns = df["close"].pct_change().dropna()
         return float(returns.std())
