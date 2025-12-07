@@ -2,34 +2,42 @@
 AI Explainability Layer
 - Menjelaskan keputusan AI dalam bahasa manusia
 - Kombinasi: rule-based + LLM narrative
-- Support: GPT-OSS-120B via Groq | Gemini Flash 2.0
 """
 
 import os
 import json
-import traceback
 from typing import Dict, Any
-
 import requests
+from dotenv import load_dotenv  # <-- TAMBAHAN PENTING
 
+# Muat environment variables (.env)
+load_dotenv()
 
 class ExplainabilityEngine:
 
     def __init__(self):
-        # Groq (GPT-OSS-120B)
-        self.openai_api = os.getenv("OPENAI_BASE_URL", "")
-        self.openai_key = os.getenv("OPENAI_API_KEY", "")
+        # Groq (GPT-OSS-120B) atau OpenAI Compatible
+        self.openai_api = os.getenv("OPENAI_BASE_URL")
+        self.openai_key = os.getenv("OPENAI_API_KEY")
         self.openai_model = os.getenv("OPENAI_MODEL_NAME", "openai/gpt-oss-120b")
 
         # Gemini Flash 2.0
-        self.gemini_key = os.getenv("GEMINI_API_KEY", "")
+        self.gemini_key = os.getenv("GEMINI_API_KEY")
 
     # ==========================
     # LLM CALLERS
     # ==========================
     def _call_gpt_oss(self, prompt: str) -> str:
+        # Cek konfigurasi sebelum request
+        if not self.openai_api or not self.openai_key:
+            print("⚠️ Explainability: OPENAI_BASE_URL atau OPENAI_API_KEY belum diset.")
+            return None
+
         try:
-            url = f"{self.openai_api}/chat/completions"
+            # Pastikan URL valid (hapus trailing slash jika ada)
+            base_url = self.openai_api.rstrip('/')
+            url = f"{base_url}/chat/completions"
+            
             headers = {
                 "Authorization": f"Bearer {self.openai_key}",
                 "Content-Type": "application/json"
@@ -41,96 +49,97 @@ class ExplainabilityEngine:
                 "max_tokens": 600
             }
 
-            res = requests.post(url, headers=headers, data=json.dumps(payload))
+            res = requests.post(url, headers=headers, data=json.dumps(payload), timeout=15)
             if res.status_code == 200:
                 return res.json()["choices"][0]["message"]["content"]
+            else:
+                print(f"⚠️ GPT-OSS Error {res.status_code}: {res.text}")
+                return None
 
-        except Exception:
+        except Exception as e:
+            print(f"⚠️ GPT-OSS Exception: {str(e)}")
             return None
 
-        return None
-
     def _call_gemini(self, prompt: str) -> str:
+        if not self.gemini_key:
+            print("⚠️ Explainability: GEMINI_API_KEY belum diset.")
+            return None
+
         try:
             url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={self.gemini_key}"
             payload = {"contents": [{"parts": [{"text": prompt}]}]}
-            res = requests.post(url, json=payload)
+            
+            res = requests.post(url, json=payload, timeout=15)
             if res.status_code == 200:
-                return res.json()["candidates"][0]["content"]["parts"][0]["text"]
-        except Exception:
+                data = res.json()
+                if "candidates" in data and len(data["candidates"]) > 0:
+                    return data["candidates"][0]["content"]["parts"][0]["text"]
+            
+            print(f"⚠️ Gemini Error {res.status_code}: {res.text}")
             return None
-
-        return None
+            
+        except Exception as e:
+            print(f"⚠️ Gemini Exception: {str(e)}")
+            return None
 
     # ==========================
     # MAIN EXPLAINABILITY
     # ==========================
     def explain(self, context: Dict[str, Any]) -> str:
         """
-        context = {
-           "pattern": {...},
-           "anomaly": {...},
-           "forecast": {...},
-           "risk": {...}
-        }
+        Menjelaskan keputusan berdasarkan Executive Summary (Macro, Micro, Risk, Recommendation).
         """
+        
+        # Serialisasi context agar aman dibaca LLM
+        try:
+            context_str = json.dumps(context, indent=2, default=str)
+        except:
+            context_str = str(context)
 
+        # --- PROMPT BARU (EXECUTIVE SUMMARY STYLE) ---
         prompt = f"""
-        Jelaskan analisa trading berdasarkan data berikut:
+        Anda adalah Senior Crypto Analyst di AltaQuant. 
+        Tugas Anda adalah memberikan "Executive Summary" berdasarkan data independen berikut.
+        Jangan jelaskan langkah per langkah seperti robot, tapi rangkum *kualitas setup* ini.
 
-        {json.dumps(context, indent=2)}
+        DATA PASAR:
+        {context_str}
 
-        Format yang dibutuhkan:
-        1. Ringkasan Perilaku Market
-        2. Pola Teknis yang Terdeteksi
-        3. Deteksi Anomali (pump/dump/volume)
-        4. Probabilitas arah market
-        5. Risiko & proteksi yang direkomendasikan
-        6. Kesimpulan (1 paragraf)
+        INSTRUKSI OUTPUT:
+        1. **Kondisi Makro (H4/H1)**: Apakah tren mendukung?
+        2. **Kondisi Mikro (M30/M15)**: Apakah ada setup valid atau kita masih menunggu? (Jelaskan spesifik: trigger apa yang ditunggu?)
+        3. **Faktor Risiko**: Sebutkan jika ada hal yang menghalangi trade (Blockers).
+        4. **Rekomendasi Akhir**: (EXECUTE / WATCHLIST / IGNORE). Berikan alasan singkat.
 
-        Buat dalam bahasa profesional, jelas, dan actionable.
+        Gunakan bahasa Indonesia yang profesional, padat, dan langsung pada inti.
         """
 
-        # Try GPT-OSS-120B first
+        # 1. Coba Primary LLM (GPT-OSS / Groq)
         out = self._call_gpt_oss(prompt)
-        if out:
-            return out
+        if out: return out
 
-        # Try Gemini if GPT-OSS timeout
+        # 2. Coba Secondary LLM (Gemini)
         out = self._call_gemini(prompt)
-        if out:
-            return out
+        if out: return out
 
-        # Final fallback = rule-based text (simple)
+        # 3. Final fallback
         return self._fallback_explanation(context)
 
     # ==========================
-    # FALLBACK
+    # FALLBACK (RULE BASED)
     # ==========================
     def _fallback_explanation(self, ctx: Dict[str, Any]) -> str:
-        anomaly = ctx.get("anomaly", {})
-        forecast = ctx.get("forecast", {})
-        risk = ctx.get("risk", {})
-
-        txt = "Market Summary:\n"
-
-        if anomaly.get("anomaly"):
-            txt += f"- Anomali terdeteksi: {anomaly.get('reasons', 'unknown')}\n"
-        else:
-            txt += "- Tidak ada anomali signifikan.\n"
-
-        txt += f"- Probabilitas Bullish: {forecast.get('bullish_prob', 0):.2f}\n"
-        txt += f"- Probabilitas Bearish: {forecast.get('bearish_prob', 0):.2f}\n"
-        txt += f"- Saran Risk: {risk.get('suggestion', 'N/A')}\n"
-
-        return txt
-
-
-if __name__ == "__main__":
-    e = ExplainabilityEngine()
-    print(e.explain({
-        "pattern": {"detected": "Bullish Flag"},
-        "anomaly": {"anomaly": False},
-        "forecast": {"bullish_prob": 0.62, "bearish_prob": 0.38},
-        "risk": {"suggestion": "SL di 0.8%, TP di 1.5%"}
-    }))
+        decision = ctx.get("ai_decision", {}) 
+        
+        status = decision.get("status", "UNKNOWN")
+        reason = decision.get("reason", "-")
+        direction = decision.get("direction", "None")
+        
+        return f"""
+        ⚠️ **AI Offline Mode**
+        
+        Sistem memutuskan: **{status}** ({direction})
+        Alasan Utama: {reason}
+        
+        (Penjelasan detail tidak tersedia karena koneksi ke LLM Analyst gagal. Cek terminal untuk detail error API).
+        """

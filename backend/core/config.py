@@ -8,14 +8,14 @@ Seluruh parameter inti AI Trading dipusatkan agar:
 """
 
 class AIConfig:
-    VERSION = "AI-Core-Config-3.0"
+    VERSION = "AI-Core-Config-3.1-AltaQuant"
 
     # =====================================================
     # Market Data
     # =====================================================
     DEFAULT_TIMEFRAME = "15m"
     TREND_TIMEFRAME = "4h"
-    MAX_CANDLE_LIMIT = 500
+    MAX_CANDLE_LIMIT = 1000
 
     # =====================================================
     # Technical Evaluator

@@ -155,35 +155,69 @@ def _is_sweep(candle, neighbor_high, neighbor_low, direction):
 
 def detect_liquidity_setup(df_m30, direction):
     """
-    Analisa M30 (Strategy 2):
-    1. Cari Swing High/Low terakhir (Liquidity Pool).
-    2. Cek apakah ada candle (terakhir 1-3) yang melakukan 'Sweep'.
+    Analisa M30 (Zone Filter & Liquidity):
+    1. Identifikasi Swing High/Low.
+    2. Deteksi Sweep (False Break).
+    3. Validasi respon area.
     """
-    if df_m30 is None or len(df_m30) < 20:
+    if df_m30 is None or len(df_m30) < 50:
         return {"valid": False, "reason": "M30 Data Insufficient"}
 
-    # Simple swing detection (3 candles fractal)
-    last_highs = df_m30["high"].rolling(3, center=True).max()
-    last_lows = df_m30["low"].rolling(3, center=True).min()
+    # Ambil Swing Points (Fractal sederhana)
+    # Window 5 kiri, 5 kanan untuk swing valid
+    df_m30['swing_high'] = df_m30['high'].rolling(window=10, center=True).max()
+    df_m30['swing_low'] = df_m30['low'].rolling(window=10, center=True).min()
     
-    # Ambil swing point yang valid (bukan NaN)
-    valid_high_val = last_highs.dropna().iloc[-5] if len(last_highs.dropna()) > 5 else df_m30["high"].max()
-    valid_low_val = last_lows.dropna().iloc[-5] if len(last_lows.dropna()) > 5 else df_m30["low"].min()
+    last = df_m30.iloc[-1]
+    prev_candles = df_m30.tail(5).to_dict('records') # Cek 5 candle terakhir utk sweep
+    
+    valid_setup = False
+    detail_msg = ""
+    
+    # Cari Swing Valid Terakhir (Liquidity Pool)
+    # Kita cari nilai swing high/low yg valid (bukan NaN) terdekat
+    last_valid_high = df_m30['swing_high'].dropna().iloc[-1] if not df_m30['swing_high'].dropna().empty else df_m30['high'].max()
+    last_valid_low = df_m30['swing_low'].dropna().iloc[-1] if not df_m30['swing_low'].dropna().empty else df_m30['low'].min()
 
-    # Cek Sweep di 3 candle terakhir
-    swept = False
-    recent_candles = df_m30.tail(3).to_dict('records')
+    # --- LOGIC LIQUIDITY SWEEP ---
+    # Syarat: Ekor tembus level, tapi Close balik ke dalam
     
-    for candle in recent_candles:
-        if _is_sweep(candle, valid_high_val, valid_low_val, direction):
-            swept = True
-            break
-            
-    # Sesuai rule: M30 Liquidity Swept + Setup Confirmed (Kita anggap sweep = setup trigger)
-    if swept:
-        return {"valid": True, "detail": "Liquidity Sweep Detected"}
+    if direction == "LONG":
+        # Cari Sweep di Low (Stop Hunt Buyer / Trap Seller)
+        for c in prev_candles:
+            # Low candle lebih rendah dari Swing Low sebelumnya
+            if c['low'] < last_valid_low:
+                # Tapi Close-nya kembali di atas Swing Low (Rejection)
+                if c['close'] > last_valid_low:
+                    valid_setup = True
+                    detail_msg = "M30 Liquidity Sweep (Bullish Rejection)"
+                    break
+                    
+    elif direction == "SHORT":
+        # Cari Sweep di High (Stop Hunt Seller / Trap Buyer)
+        for c in prev_candles:
+            # High candle lebih tinggi dari Swing High sebelumnya
+            if c['high'] > last_valid_high:
+                # Tapi Close-nya kembali di bawah Swing High (Rejection)
+                if c['close'] < last_valid_high:
+                    valid_setup = True
+                    detail_msg = "M30 Liquidity Sweep (Bearish Rejection)"
+                    break
     
-    return {"valid": False, "reason": "No M30 Liquidity Sweep Found"}
+    # Fallback: Jika harga berada di "Zone Penting" tanpa sweep ekstrim (Retest biasa)
+    if not valid_setup:
+        # Simple Zone Filter: Harga mendekati key level dalam toleransi 0.5%
+        if direction == "LONG" and abs(last['close'] - last_valid_low) / last_valid_low < 0.005:
+             valid_setup = True
+             detail_msg = "M30 Support Retest (In Zone)"
+        elif direction == "SHORT" and abs(last['close'] - last_valid_high) / last_valid_high < 0.005:
+             valid_setup = True
+             detail_msg = "M30 Resistance Retest (In Zone)"
+
+    if valid_setup:
+        return {"valid": True, "detail": detail_msg, "levels": {"support": last_valid_low, "resistance": last_valid_high}}
+    
+    return {"valid": False, "reason": "No M30 Liquidity/Zone Setup Found"}
 
 
 def detect_m15_execution_basic(df_m15, direction):

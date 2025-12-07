@@ -10,7 +10,6 @@ Tujuan:
 
 from typing import Dict, Any
 
-
 class JSONUnifier:
 
     @staticmethod
@@ -23,38 +22,36 @@ class JSONUnifier:
         return {
             "meta": {
                 "engine_version": ctx.get("engine_version", "Unknown"),
-                "pipeline_version": ctx.get("pipeline_version", "AI-Pipeline-7.0")
+                "pipeline_version": ctx.get("pipeline_version", "AI-Pipeline-7.1")
             },
 
             "market": {
                 "symbol": ctx.get("symbol"),
                 "price": ctx.get("price"),
-                "trend_4h": ctx.get("trend_4h"),
-                "trend_15m": ctx.get("trend_15m"),
+                # Pastikan ini mengambil data yang benar dari context
+                "trend_4h": ctx.get("trend_h4", {}).get("direction", "NEUTRAL"),
                 "atr": ctx.get("atr")
             },
 
-            "patterns": {
-                "chart": ctx.get("chart_pattern"),
-                "candle": ctx.get("candle_pattern")
-            },
+            # BAGIAN PENTING: Mengirim hasil Vision AI ke UI
+            "vision_analysis": ctx.get("vision_analysis"),
 
+            # Detail Teknis untuk UI Box (H4, H1)
             "technical_signal": ctx.get("technical_signal"),
+            
+            # Detail Struktur (M30/M15 detail ada di dalam final_decision -> notes)
             "microstructure": ctx.get("microstructure"),
 
-            "risk": {
-                "position_size": ctx.get("risk", {}).get("position_size"),
-                "stop_loss": ctx.get("risk", {}).get("stop_loss"),
-                "take_profit": ctx.get("risk", {}).get("take_profit"),
-                "atr": ctx.get("atr")
-            },
+            # Detail Risk (SL/TP/Size)
+            "risk": ctx.get("risk", {}),
 
             "hedge": ctx.get("hedge"),
 
+            # Keputusan Akhir (Status, Reason, Notes)
             "final_decision": ctx.get("ai_decision"),
 
+            # Penjelasan Naratif
             "explainability": ctx.get("explain")
         }
-
 
 json_unifier = JSONUnifier()
