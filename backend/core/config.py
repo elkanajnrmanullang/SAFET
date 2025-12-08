@@ -8,7 +8,7 @@ Seluruh parameter inti AI Trading dipusatkan agar:
 """
 
 class AIConfig:
-    VERSION = "AI-Core-Config-3.3-Matrix" # Update Version
+    VERSION = "AI-Core-Config-4.0-Adaptive" # Update Version
 
     # =====================================================
     # Market Data
@@ -25,6 +25,16 @@ class AIConfig:
     # [NEW] Strategy Matrix Thresholds
     ADX_SUPER_TREND = 35.0       # Batas ADX untuk masuk Tier 2 (Assault)
     TIER_3_RISK_SCALE = 0.7      # Risk modifier untuk Tier 3 (Guerrilla / 70% Size)
+    
+    # [NEW] Adaptive Structure & Volatility
+    ADX_AGGRESSIVE_THRESHOLD = 30.0 # ADX > 30 -> Window 10 (Mode Agresif)
+    ADX_NORMAL_THRESHOLD = 20.0     # ADX < 20 -> NO_TRADE (Hard Filter)
+    
+    ATR_OVERHEAT_MULTIPLIER = 1.5   # ATR > 1.5x SMA(ATR) -> OVERHEAT (H1 Volatility Gate)
+    ATR_LESU_MULTIPLIER = 1.0       # ATR < 1.0x SMA(ATR) -> LESU/DELAY (H1 Volatility Gate)
+    
+    # [NEW] Risk Adjustment for Warnings
+    EXHAUSTION_RISK_REDUCTION = 0.8 # Risk modifier for H4 Exhaustion Warning (80% Size)
 
     # =====================================================
     # Microstructure (CHOCH/BOS)
@@ -35,9 +45,9 @@ class AIConfig:
     # Risk Engine
     # =====================================================
     RISK_PCT = 0.01
-    ATR_MULTIPLIER_SL = 1.7
-    ATR_MULTIPLIER_TP = 3.4
-
+    ATR_MULTIPLIER_SL = 0.5      # Rule Baru: Buffer 0.5 x ATR
+    ATR_MULTIPLIER_TP = 2.0      # Target Fixed RR 1:2
+    
     # =====================================================
     # Hedge Engine
     # =====================================================

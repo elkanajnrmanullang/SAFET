@@ -11,6 +11,9 @@ import numpy as np
 import pandas as pd
 from typing import Dict, Any
 
+# Import Config untuk mendapatkan ATR Multiplier
+from backend.core.config import config as core_config # <-- IMPORT BARU
+
 class RiskEngine:
     def __init__(self, balance: float, risk_pct: float = 0.01):
         self.balance = float(balance)
@@ -25,7 +28,7 @@ class RiskEngine:
         
         # 1. Tentukan Buffer (Napas Tambahan)
         # WAJIB: Invalidation Point + 0.5 ATR
-        buffer = atr * 0.5 
+        buffer = atr * core_config.ATR_MULTIPLIER_SL # <-- Menggunakan config (0.5)
 
         # Ambil level struktur dari M30/M15 (yang dikirim dari engine.py)
         # Fallback jika struktur gagal terdeteksi: Pakai 1.5 ATR (standard swing)
@@ -34,7 +37,7 @@ class RiskEngine:
 
         # 2. Hitung Harga Stop Loss (SL)
         if direction.upper() == "LONG":
-            # SL = Support - Buffer
+            # SL = Support - Buffer (Long SL di bawah Support)
             sl_price = sup - buffer
             
             # Safety Check: SL tidak boleh di atas Entry (Fatal logic error)
@@ -42,7 +45,7 @@ class RiskEngine:
                 sl_price = entry - (atr * 1.0) # Fallback darurat
                 
         elif direction.upper() == "SHORT":
-            # SL = Resistance + Buffer
+            # SL = Resistance + Buffer (Short SL di atas Resistance)
             sl_price = res + buffer
             
             # Safety Check: SL tidak boleh di bawah Entry
@@ -58,10 +61,12 @@ class RiskEngine:
             risk_dist = entry * 0.01 # Prevent division by zero
 
         # 4. Hitung Take Profit (TP) -> TARGET FIXED RATIO 1:2
+        rr_ratio = core_config.ATR_MULTIPLIER_TP # Menggunakan config (2.0)
+        
         if direction.upper() == "LONG":
-            tp_price = entry + (risk_dist * 2.0)
+            tp_price = entry + (risk_dist * rr_ratio)
         else:
-            tp_price = entry - (risk_dist * 2.0)
+            tp_price = entry - (risk_dist * rr_ratio)
 
         # 5. Position Sizing
         risk_amount_usd = self.balance * self.risk_pct
@@ -74,7 +79,7 @@ class RiskEngine:
             "position_size": round(position_size, 4),
             "risk_amount": round(risk_amount_usd, 2),
             "atr": atr,
-            "rr_ratio": "1:2.0 (Fixed)",
+            "rr_ratio": f"1:{rr_ratio:.1f} (Fixed)",
             "note": "SL @ Structure + 0.5 ATR Buffer"
         }
 

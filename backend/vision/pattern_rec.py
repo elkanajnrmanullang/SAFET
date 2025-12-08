@@ -3,10 +3,9 @@ import requests
 import json
 import base64
 import pandas as pd
-from typing import Dict, AnyStr
 import shutil
 from datetime import datetime
-from typing import Optional, Tuple
+from typing import Dict, Any, AnyStr, Optional, Tuple # <-- FIX: Menambahkan 'Any' dan mengonsolidasi imports
 
 TEMP_VISION_DIR = "data/temp_vision"
 os.makedirs(TEMP_VISION_DIR, exist_ok=True)
@@ -189,6 +188,7 @@ class PatternRecognition:
 # Instance global agar mudah diimport
 vision_engine = PatternRecognition()
 
+# Bagian helper di bawah ini juga menggunakan 'Optional' dan 'Tuple' yang sekarang sudah diimpor.
 def _safe_save_image(src_path: str) -> Optional[str]:
     try:
         if not src_path:

@@ -2,6 +2,7 @@ import ccxt
 import pandas as pd
 import pandas_ta as ta
 import numpy as np
+import math # <-- BARU: Diperlukan untuk operasi matematika
 
 # Import Config untuk Limit Candle (1000)
 from backend.core.config import config
@@ -10,11 +11,13 @@ from backend.core.config import config
 from backend.analytics.indicators import (
     apply_indicators_by_tf,
     compute_atr,
-    compute_trend_structure
+    compute_atr_sma, # <-- BARU: Untuk Volatility Gate
+    compute_trend_structure,
+    detect_rsi_divergence # <-- BARU: Untuk Exhaustion Warning
 )
 
 # ================================================================
-#  CONNECTION
+#  CONNECTION & MARKET DATA FETCH (TIDAK BERUBAH)
 # ================================================================
 def get_exchange():
     """
@@ -62,7 +65,7 @@ def fetch_market_data(symbol, timeframe, limit=None):
     return df
 
 # ================================================================
-#  DYNAMIC SYMBOL FETCHER (PURE REAL-TIME)
+#  DYNAMIC SYMBOL FETCHER & INDICATOR WRAPPER (TIDAK BERUBAH)
 # ================================================================
 def get_top_symbols(limit=50):
     """
@@ -98,14 +101,14 @@ def get_top_symbols(limit=50):
         return []
 
 # ================================================================
-#  INDICATOR WRAPPER
+#  INDICATOR WRAPPER (TIDAK BERUBAH)
 # ================================================================
 def apply_indicators(df, tf):
     if df is None or df.empty:
         return None
     return apply_indicators_by_tf(df, tf)
 
-# TAMBAHKAN HELPER INI UNTUK MEMBACA SENTIMEN POLA USER
+# TAMBAHKAN HELPER INI UNTUK MEMBACA SENTIMEN POLA USER (TIDAK BERUBAH)
 def _get_pattern_sentiment(pattern_name: str) -> str:
     """
     Mapping sederhana untuk validasi arah pola chart manual user.
@@ -134,63 +137,134 @@ def _get_pattern_sentiment(pattern_name: str) -> str:
     
     return "NEUTRAL"
 
-def detect_trend_h4(df, structure_label="NEUTRAL"):
+# [UPDATE] DETECT TREND H4 (Anchor)
+def detect_trend_h4(df, adx_value):
     """
     Mendeteksi Trend H4 (Anchor).
-    Valid = EMA Alignment + Structure Alignment + ADX > 20
+    Valid = EMA Alignment + Adaptive Structure Alignment + ADX >= 20
+    + Menambahkan Exhaustion Warning (RSI Divergence)
     """
     if df is None or len(df) < 200:
-        return {"valid": False, "direction": "NEUTRAL", "adx": 0}
+        return {"valid": False, "direction": "NEUTRAL", "adx": 0, "exhaustion": False, "reason": "Data Insufficient"}
 
     last = df.iloc[-1]
-    adx_val = float(last.get("ADX", 0) or 0)
+    adx_val = float(adx_value)
     
-    # 1. EMA Alignment
+    # 1. Hard Filter: ADX < 20 (NO_TRADE)
+    if adx_val < config.ADX_NORMAL_THRESHOLD:
+        return {
+            "valid": False, 
+            "direction": "NEUTRAL", 
+            "adx": adx_val, 
+            "exhaustion": False, 
+            "reason": f"Market Choppy/Sideways (ADX < {config.ADX_NORMAL_THRESHOLD:.1f})"
+        }
+    
+    # 2. Adaptive Structure
+    # Hitung Structure dengan Adaptive Window berdasarkan ADX
+    structure_label, window_size = compute_trend_structure(df, adx_val)
+    
+    # Safety check: Jika structure gagal terdeteksi di window adaptif
+    if structure_label == "NEUTRAL":
+         return {
+            "valid": False, 
+            "direction": "NEUTRAL", 
+            "adx": adx_val, 
+            "exhaustion": False, 
+            "reason": f"H4 Structure Invalid (NEUTRAL in W{window_size})"
+        }
+
+    # 3. EMA Alignment
     ema_direction = "NEUTRAL"
     if last["EMA50"] > last["EMA200"]:
         ema_direction = "LONG"
     elif last["EMA50"] < last["EMA200"]:
         ema_direction = "SHORT"
         
-    # 2. Structure Alignment (HH/HL Check)
-    # structure_label didapat dari parameter yang dikirim build_ai_context
-    
+    # 4. Final Alignment Check (Struktur vs EMA)
     final_direction = "NEUTRAL"
     valid = False
     
-    # Rule: EMA & Structure harus searah DAN ADX >= 20
-    # Jika Structure NEUTRAL, kita anggap tidak valid untuk safety
+    # Rule: EMA & Structure harus searah
     if ema_direction == structure_label and ema_direction != "NEUTRAL":
-        if adx_val >= 20:
-            final_direction = ema_direction
-            valid = True
+        final_direction = ema_direction
+        valid = True
     
+    # 5. Exhaustion Warning (RSI Divergence)
+    is_exhausted, exhaust_reason = detect_rsi_divergence(df, final_direction)
+    
+    if valid:
+        reason_msg = f"H4 EMA({ema_direction}) + Struct({structure_label} W{window_size}) Match, ADX={adx_val:.1f}"
+        if is_exhausted:
+            reason_msg += f" | ⚠️ EXHAUSTION: {exhaust_reason}"
+    else:
+        reason_msg = f"H4 Alignment Failed: EMA({ema_direction}) vs Struct({structure_label} W{window_size})"
+        
     return {
         "valid": valid, 
         "direction": final_direction, 
         "adx": float(adx_val),
-        "reason": f"H4 EMA({ema_direction}) + Struct({structure_label}) Match, ADX={adx_val:.1f}"
+        "exhaustion": is_exhausted,
+        "reason": reason_msg
     }
 
+# [UPDATE] DETECT BIAS H1 (Confirmation - Bias)
 def detect_bias_h1(df, h4_direction):
-    if df is None or df.empty:
-        return {"aligned": False, "reason": "No Data"}
-    
+    """
+    Mendeteksi Bias H1: Price Alignment (Close vs EMA50) + Volatility Gate (ATR vs SMA(ATR)).
+    """
+    if df is None or df.empty or len(df) < 20 or "ATR" not in df.columns or "EMA50" not in df.columns:
+        return {"aligned": False, "reason": "No Data", "volatility": "NO_DATA"}
+
     last = df.iloc[-1]
     close = last["close"]
     ema50 = last["EMA50"]
+    atr_now = last.get("ATR", 0)
     
+    # --- 1. Price Alignment (WAJIB) ---
     aligned = False
     if h4_direction == "LONG" and close > ema50:
         aligned = True
     elif h4_direction == "SHORT" and close < ema50:
         aligned = True
+    
+    # Jika tidak aligned, langsung FAIL (H4-H1 Divergence)
+    if not aligned:
+        return {
+            "aligned": False,
+            "reason": "H1 Price Divergence (Close vs EMA50)",
+            "volatility": "NO_TRADE"
+        }
+
+    # --- 2. Volatility Gate ---
+    volatility_status = "NORMAL"
+    reason_msg = "H1 Price vs EMA50 Agreement"
+    
+    if atr_now == 0 or len(df) < 20:
+        volatility_status = "NO_DATA"
+    else:
+        # Panggil ATR SMA
+        atr_sma = compute_atr_sma(df, length=20)
         
+        if atr_sma == 0:
+            volatility_status = "NO_DATA"
+        elif atr_now > atr_sma * config.ATR_OVERHEAT_MULTIPLIER:
+            volatility_status = "OVERHEAT"
+            reason_msg += " | Volatility OVERHEAT (>1.5x Avg ATR)"
+        elif atr_now < atr_sma * config.ATR_LESU_MULTIPLIER: # LESU jika < 1.0x Avg ATR
+            volatility_status = "LESU"
+            reason_msg += " | Volatility LESU (<1.0x Avg ATR)"
+        else:
+            volatility_status = "NORMAL"
+            reason_msg += f" | Volatility NORMAL ({atr_now/atr_sma:.2f}x Avg ATR)"
+
     return {
         "aligned": aligned,
-        "reason": "H1 Price vs EMA50 Agreement" if aligned else "H1 Divergence"
+        "reason": reason_msg,
+        "volatility": volatility_status
     }
 
+# [UPDATE] BUILD AI CONTEXT (H4/H1 Orchestration)
 def build_ai_context(symbol: str, user_chart_context: str | None = None):
     # Gunakan Limit Global dari Config (1000 Candle)
     limit = config.MAX_CANDLE_LIMIT
@@ -210,11 +284,11 @@ def build_ai_context(symbol: str, user_chart_context: str | None = None):
     if df_h4 is None or df_m15 is None:
         return None
 
-    # Analyze Structure Terlebih Dahulu (Untuk dikirim ke detect_trend_h4)
-    h4_structure = compute_trend_structure(df_h4) if df_h4 is not None else "NEUTRAL"
+    # [NEW] Analyze H4 ADX
+    h4_adx = df_h4.iloc[-1].get("ADX", 0) if df_h4 is not None and "ADX" in df_h4.columns else 0
 
     # Analyze Trend H4 (Anchor)
-    trend_h4 = detect_trend_h4(df_h4, structure_label=h4_structure)
+    trend_h4 = detect_trend_h4(df_h4, h4_adx)
     
     # Analyze Bias H1
     bias_h1 = detect_bias_h1(df_h1, trend_h4["direction"])
@@ -234,6 +308,7 @@ def build_ai_context(symbol: str, user_chart_context: str | None = None):
     }
     return context
 
+# [UPDATE] EVALUATE TECHNICAL (Gatekeeper Final)
 def evaluate_technical(data):
     trend = data.get("trend_h4", {})
     bias = data.get("bias_h1", {})
@@ -246,16 +321,23 @@ def evaluate_technical(data):
         }
 
     direction = trend["direction"]
+    volatility = bias.get("volatility")
 
-    # 2. Cek Validitas Bias (H1)
+    # 2. Cek Volatility (DELAY jika Lesu)
+    if volatility == "LESU":
+         return {
+            "valid": False, 
+            "reason": "H1 Volatility Gate: Market Lesu (Delay Trade)"
+        }
+        
+    # 3. Cek Validitas Bias (H1) - Price Alignment
     if not bias.get("aligned"):
          return {
             "valid": False, 
             "reason": "H1 Bias Divergence (Price vs EMA50 mismatch with H4)"
         }
 
-    # 3. (REVISI) Validasi Context Pattern User (Pindah ke H1 Check)
-    # Rule: Chart pattern harus searah dengan Bias H1
+    # 4. Validasi Context Pattern User (Pindah ke H1 Check)
     user_pattern = data.get("user_context", "")
     if user_pattern:
         pat_sentiment = _get_pattern_sentiment(user_pattern)
@@ -266,8 +348,10 @@ def evaluate_technical(data):
                 "reason": f"H1 Context Conflict: User Pattern '{user_pattern}' ({pat_sentiment}) berlawanan dengan H1 Bias ({direction})"
             }
 
+    # Jika lolos semua, status valid dan sertakan volatility status untuk Engine
     return {
         "valid": True,
         "direction": direction,
-        "confidence": 0.80
+        "confidence": 0.80,
+        "volatility": volatility
     }

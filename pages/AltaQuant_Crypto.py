@@ -4,7 +4,7 @@ import time
 
 # =============================
 # IMPORTS (PIPELINE INTEGRATION)
-# =============================
+# =============================================================
 from backend.crypto.pipeline import pipeline
 from backend.crypto.data import get_top_symbols
 from backend.crypto.screener import CryptoScreener
@@ -92,7 +92,8 @@ st.markdown("""
 # =============================
 def render_analysis_card(symbol, screener_res, result_json=None):
     # Extract decision dari structure JSON Unifier
-    decision = result_json.get("final_decision", {}) if result_json else {}
+    # FIX: Menggunakan 'or {}' untuk mencegah NoneType error
+    decision = result_json.get("final_decision", {}) if result_json else {} 
     technical_ctx = result_json.get("technical_signal", {}) if result_json else {}
     
     # Tentukan Status Header & Warna
@@ -115,7 +116,7 @@ def render_analysis_card(symbol, screener_res, result_json=None):
         status_color = "header-wait"
         main_status = "WATCHLIST (NEAR ENTRY)"
         icon = "👀"
-    elif status_code == "NO_TRADE":
+    elif status_code == "NO_TRADE" or status_code == "BLOCKED_BY_FUNDAMENTAL" or status_code == "EVENT_BLACKOUT":
         status_color = "header-fail"
         main_status = "NO TRADE / BLOCKED"
         icon = "🛑"
@@ -162,6 +163,7 @@ def render_analysis_card(symbol, screener_res, result_json=None):
     if decision:
         st.markdown('<div class="sub-section"><div class="sub-title">TAHAP 1 — STRATEGY MATRIX (WATERFALL)</div>', unsafe_allow_html=True)
         
+        # Fundamental Guard
         fund = decision.get("fundamental", {})
         fund_flag = fund.get("flag", "GREEN")
         f_color = "check-fail" if fund_flag == "RED" else ("check-pass" if fund_flag == "GREEN" else "check-wait")
@@ -172,27 +174,39 @@ def render_analysis_card(symbol, screener_res, result_json=None):
         # A. H4 (Anchor)
         h4_valid = technical_ctx.get('valid')
         h4_dir = technical_ctx.get('direction', 'NEUTRAL')
+        h4_exhaustion = technical_ctx.get('exhaustion', False)
         h4_color = "#10b981" if h4_valid else "#ef4444"
         
+        h4_desc_status = "Valid Structure & EMA"
+        if h4_exhaustion: h4_desc_status += " | ⚠️ Exhaustion (Divergence)"
+        if not h4_valid: h4_desc_status = "Invalid/Sideways"
+
         col_h4.markdown(f"""
         <div class="logic-box" style="border-left: 4px solid {h4_color};">
             <span class="logic-title">TF H4 (Anchor)</span>
             <span style="color: {h4_color}; font-weight:bold;">{h4_dir}</span>
-            <span class="logic-desc">{"Valid Structure & EMA" if h4_valid else "Invalid/Sideways"}</span>
+            <span class="logic-desc">{h4_desc_status}</span>
         </div>
         """, unsafe_allow_html=True)
         
-        # B. H1 (Bias)
-        # Logika bias: Jika NO_TRADE karena H1, maka merah. Jika status lanjut, hijau.
+        # B. H1 (Bias) - Diperbarui untuk Volatility Gate
+        h1_volatility = result_json.get("bias_h1", {}).get("volatility", "NO_DATA")
         h1_msg = decision.get("reason", "")
-        h1_ok = "H1" not in h1_msg and "Gatekeeper" not in h1_msg
-        h1_color = "#10b981" if h1_ok and h4_valid else "#64748b"
+        h1_ok = "H1" not in h1_msg and "Gatekeeper" not in h1_msg and h1_volatility != "LESU"
         
+        # Warna H1 berdasarkan Volatility
+        if h1_volatility == "OVERHEAT": h1_color = "#f59e0b" # Orange
+        elif h1_volatility == "NORMAL": h1_color = "#10b981" # Green
+        elif h1_volatility == "LESU": h1_color = "#ef4444" # Red (sudah diblok di Gatekeeper)
+        else: h1_color = "#64748b"
+        
+        h1_desc_status = f"{'ALIGNED' if h1_ok else 'CONFLICT'} ({h1_volatility})"
+
         col_h1.markdown(f"""
         <div class="logic-box" style="border-left: 4px solid {h1_color};">
             <span class="logic-title">TF H1 (Bias)</span>
-            <span style="color: {h1_color}; font-weight:bold;">{"ALIGNED" if h1_ok else "CONFLICT"}</span>
-            <span class="logic-desc">Price vs EMA50</span>
+            <span style="color: {h1_color}; font-weight:bold;">{h1_desc_status}</span>
+            <span class="logic-desc">Price vs EMA50 & Volatility Gate</span>
         </div>
         """, unsafe_allow_html=True)
 
@@ -214,6 +228,10 @@ def render_analysis_card(symbol, screener_res, result_json=None):
             m30_status = "SKIPPED 🛡️"
             m30_desc = "Local Reaction Only"
             m30_color = "#64748b" # Grey
+        elif "Tier 1" in strategy_name and "Volatility Gated" in strategy_name:
+             m30_status = "READY ✅"
+             m30_desc = m30_note.replace("M30: ", "") + " (Tier 1 Forced)"
+             m30_color = "#f59e0b"
         elif "Tier 1" in strategy_name:
             m30_status = "READY ✅"
             m30_desc = m30_note.replace("M30: ", "")
@@ -273,7 +291,7 @@ def render_analysis_card(symbol, screener_res, result_json=None):
             r3.metric("Stop Loss", f"${risk.get('stop_loss', 0):,.4f}")
             r4.metric("Take Profit", f"${risk.get('take_profit', 0):,.4f}")
             
-            # Tampilkan Risk Note (terutama jika ada Scaling Tier 3)
+            # Tampilkan Risk Note (terutama jika ada Scaling Tier 3 atau Exhaustion)
             risk_note = risk.get('note', '')
             st.success(f"Position Size: {risk.get('position_size')} Units | Risk: ${risk.get('risk_amount')} ({risk_note})")
 
@@ -373,7 +391,10 @@ if mode == "Auto-Scanner (Hunter)":
                 
                 # Jalankan Pipeline Utama (Tanpa Gambar)
                 result_json = pipeline.run(sym)
-                decision = result_json.get("final_decision", {})
+                
+                # FIX: Mencegah AttributeError jika 'final_decision' bernilai None
+                decision = result_json.get("final_decision") or {}
+                
                 status_code = decision.get("status")
                 
                 # KATEGORISASI HASIL
@@ -389,7 +410,8 @@ if mode == "Auto-Scanner (Hunter)":
                         "symbol": sym, "screen": screen_res, "result": result_json
                     })
                 else:
-                    add_log(f"   [O] {sym}: {status_code}")
+                    add_code = status_code if status_code else "Pipeline Error"
+                    add_log(f"   [O] {sym}: {add_code}")
                     
             progress_bar.empty()
             status.update(label="✅ Auto-Scan Complete", state="complete")

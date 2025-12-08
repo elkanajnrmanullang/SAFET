@@ -30,7 +30,6 @@ def final_decision(
     # 🛡️ STEP 0: THE GATEKEEPER (Global Filter)
     # ============================================================
     # Syarat Mutlak: H4 Trend Valid & H1 Bias Aligned & User Pattern Valid
-    # Jika gagal di sini, tidak ada Tier yang boleh jalan.
     
     tech_audit = evaluate_technical(technical_data)
     
@@ -44,6 +43,10 @@ def final_decision(
     direction = tech_audit.get("direction")
     base_confidence = 0.80 
 
+    # [NEW] Retrieve Volatility Status dan H4 Exhaustion
+    is_exhausted = technical_data.get("trend_h4", {}).get("exhaustion", False)
+    volatility = tech_audit.get("volatility", "NORMAL")
+    
     # ============================================================
     # 🛡️ STEP 0.5: EXTERNAL FILTERS
     # ============================================================
@@ -69,14 +72,11 @@ def final_decision(
     adx_val = float(trend_h4_data.get("adx", 0))
     
     df_m30 = technical_data.get("df_m30")
-    # Cek M30 Zone/Liquidity (Syarat Tier 1)
     m30_setup = detect_liquidity_setup(df_m30, direction) 
     
     df_m15 = technical_data.get("df_m15")
-    # Cek M15 Breakout/Bounce (Syarat Wajib Semua Tier)
-    m15_exec = detect_m15_execution(df_m15, direction)    
-    
-    # Logic Variables
+    # Note: Kita asumsikan detect_m15_execution sudah cukup canggih dengan logic Skenario A/B/C
+    m15_exec = detect_m15_execution(df_m15, direction, volatility) 
     is_super_trend = adx_val >= config.ADX_SUPER_TREND
     
     final_status = "WAITING"
@@ -86,65 +86,73 @@ def final_decision(
     applied_risk_scale = 1.0
 
     # ------------------------------------------------------------
-    # 🥇 TIER 1: THE SNIPER ELITE (Ideal Setup)
-    # Syarat: M30 Zone/Sweep VALID + M15 Trigger VALID
+    # 🚩 Filter Tambahan: Volatility Gate - OVERHEAT
+    # Volatilitas ekstrem hanya mengizinkan Tier 1 (Sniper)
     # ------------------------------------------------------------
-    if m30_setup["valid"]:
-        if m15_exec["valid"]:
-            final_status = "EXECUTE"
-            strategy_used = "Tier 1: Sniper Elite (M30 Sweep + M15 Trig)"
-            notes.append(f"M30: {m30_setup.get('detail')}")
-            notes.append(f"M15: {m15_exec.get('detail')}")
-            # Sniper pakai level struktur M30 (lebih kuat)
-            structure_levels_for_risk = m30_setup.get("levels") 
-            applied_risk_scale = 1.0
-        else:
-            final_status = "WAIT_FOR_TRIGGER"
-            final_reason = f"Tier 1 Active: M30 Ready ({m30_setup.get('detail')}), Waiting M15"
-            notes.append(f"M30 Locked: {m30_setup.get('detail')}")
-
-    # ------------------------------------------------------------
-    # 🥈 TIER 2: THE ASSAULT (Momentum Bypass)
-    # Syarat: Super Trend (ADX > 35) + M15 Trigger VALID
-    # (M30 Setup di-bypass karena tren terlalu kencang)
-    # ------------------------------------------------------------
-    elif is_super_trend:
-        if m15_exec["valid"]:
-            final_status = "EXECUTE"
-            strategy_used = "Tier 2: Assault (Super Trend Bypass)"
-            notes.append(f"🚀 Super Trend (ADX {adx_val:.1f}). M30 Bypassed.")
-            notes.append(f"M15: {m15_exec.get('detail')}")
-            # Assault pakai level struktur M15 (karena M30 dilewati)
-            structure_levels_for_risk = m15_exec.get("levels")
-            applied_risk_scale = 1.0
-            base_confidence -= 0.05 
-        else:
-            final_status = "WAIT_FOR_TRIGGER"
-            final_reason = "Tier 2 Active: Super Trend, Waiting M15 Impulse"
-
-    # ------------------------------------------------------------
-    # 🥉 TIER 3: THE GUERRILLA (Local Reaction)
-    # Syarat: M30 Gagal, Tren Normal (ADX > 20), TAPI M15 Reaksi Bagus
-    # Risk: Reduced (70%)
-    # ------------------------------------------------------------
-    elif m15_exec["valid"]:
-        # Gatekeeper sudah memastikan ADX > 20 dan Tren Valid
-        final_status = "EXECUTE"
-        strategy_used = "Tier 3: Guerrilla (Local Reaction Fallback)"
-        notes.append("⚠️ M30 Zone Missed. Using Local M15 Reaction.")
-        notes.append(f"M15: {m15_exec.get('detail')}")
+    if volatility == "OVERHEAT":
+        notes.append("🛑 H1 Volatility OVERHEAT - Tier 2/3 Blocked.")
         
-        # Guerrilla pakai level lokal M15
-        structure_levels_for_risk = m15_exec.get("levels")
-        
-        # SAFETY FIRST: Kurangi resiko sesuai Config
-        applied_risk_scale = config.TIER_3_RISK_SCALE 
-        base_confidence -= 0.15 
+        if m30_setup["valid"]:
+            if m15_exec["valid"]:
+                final_status = "EXECUTE"
+                strategy_used = "Tier 1: Sniper Elite (M30 Sweep + M15 Trig) | 🛑 Volatility Gated"
+                notes.append(f"M30: {m30_setup.get('detail')}")
+                notes.append(f"M15: {m15_exec.get('detail')}")
+                structure_levels_for_risk = m30_setup.get("levels") 
+                applied_risk_scale = 1.0
+            else:
+                final_status = "WAIT_FOR_TRIGGER"
+                final_reason = f"Tier 1 Active: M30 Ready, Waiting M15 | 🛑 Volatility Gated"
+                notes.append(f"M30 Locked: {m30_setup.get('detail')}")
+        else:
+            final_status = "NO_TRADE"
+            final_reason = f"Volatility OVERHEAT - Blocking Tier 2/3. No Tier 1 Setup."
 
+    # ------------------------------------------------------------
+    # Logika Waterfall NORMAL (Jika tidak OVERHEAT)
+    # ------------------------------------------------------------
     else:
-        # Jika Tier 1 gagal trigger, Tier 2 syarat ADX tak penuhi, Tier 3 M15 tak valid
-        final_status = "WAIT_FOR_SETUP"
-        final_reason = f"No Setup. (M30: {m30_setup.get('reason')}) (ADX: {adx_val:.1f})"
+        # 🥇 TIER 1: THE SNIPER ELITE (Ideal Setup)
+        if m30_setup["valid"]:
+            if m15_exec["valid"]:
+                final_status = "EXECUTE"
+                strategy_used = "Tier 1: Sniper Elite (M30 Sweep + M15 Trig)"
+                notes.append(f"M30: {m30_setup.get('detail')}")
+                notes.append(f"M15: {m15_exec.get('detail')}")
+                structure_levels_for_risk = m30_setup.get("levels") 
+                applied_risk_scale = 1.0
+            else:
+                final_status = "WAIT_FOR_TRIGGER"
+                final_reason = f"Tier 1 Active: M30 Ready ({m30_setup.get('detail')}), Waiting M15"
+                notes.append(f"M30 Locked: {m30_setup.get('detail')}")
+
+        # 🥈 TIER 2: THE ASSAULT (Momentum Bypass)
+        elif is_super_trend:
+            if m15_exec["valid"]:
+                final_status = "EXECUTE"
+                strategy_used = "Tier 2: Assault (Super Trend Bypass)"
+                notes.append(f"🚀 Super Trend (ADX {adx_val:.1f}). M30 Bypassed.")
+                notes.append(f"M15: {m15_exec.get('detail')}")
+                structure_levels_for_risk = m15_exec.get("levels")
+                applied_risk_scale = 1.0
+                base_confidence -= 0.05 
+            else:
+                final_status = "WAIT_FOR_TRIGGER"
+                final_reason = "Tier 2 Active: Super Trend, Waiting M15 Impulse"
+
+        # 🥉 TIER 3: THE GUERRILLA (Local Reaction)
+        elif m15_exec["valid"]:
+            final_status = "EXECUTE"
+            strategy_used = "Tier 3: Guerrilla (Local Reaction Fallback)"
+            notes.append("⚠️ M30 Zone Missed. Using Local M15 Reaction.")
+            notes.append(f"M15: {m15_exec.get('detail')}")
+            structure_levels_for_risk = m15_exec.get("levels")
+            applied_risk_scale = config.TIER_3_RISK_SCALE 
+            base_confidence -= 0.15 
+
+        else:
+            final_status = "WAIT_FOR_SETUP"
+            final_reason = f"No Setup. (M30: {m30_setup.get('reason')}) (ADX: {adx_val:.1f})"
 
     # ============================================================
     # 📝 STEP 2: EXECUTION & SIZING
@@ -166,13 +174,20 @@ def final_decision(
         # Fundamental Modifier
         if fundamental.get("action") == "REDUCE_SIZE":
             base_risk_pct /= 2
+            
+        # [NEW] H4 Exhaustion Modifier (Stacks on applied_risk_scale)
+        final_applied_risk_scale = applied_risk_scale
+        if is_exhausted:
+            notes.append("⚠️ H4 Exhaustion Warning - Risk Reduced.")
+            # Risk reduction (e.g., Tier 3's 0.7 gets further reduced by 0.8)
+            final_applied_risk_scale *= config.EXHAUSTION_RISK_REDUCTION 
         
-        # Strategy Matrix Modifier (Apply Tier Scale)
-        final_risk_pct = base_risk_pct * applied_risk_scale
+        # Strategy Matrix Modifier (Apply Total Risk Scale)
+        final_risk_pct = base_risk_pct * final_applied_risk_scale
 
         risk_engine = RiskEngine(equity, final_risk_pct)
         
-        # Fallback Level jika structure kosong (seharusnya tidak terjadi jika structure.py benar)
+        # Fallback Level
         if not structure_levels_for_risk:
             structure_levels_for_risk = m15_exec.get("levels", {})
 
@@ -184,8 +199,12 @@ def final_decision(
         )
         
         # Info tambahan di notes risiko
-        if applied_risk_scale < 1.0:
-            risk_calc["note"] += f" (Reduced Size: {applied_risk_scale*100:.0f}%)"
+        if final_applied_risk_scale < 1.0:
+            risk_calc["note"] += f" (Reduced Size: {final_applied_risk_scale*100:.0f}%)"
+            
+        # Update applied_risk_scale for clean return/logging purposes
+        applied_risk_scale = final_applied_risk_scale
+
 
         return {
             "status": "EXECUTE",
