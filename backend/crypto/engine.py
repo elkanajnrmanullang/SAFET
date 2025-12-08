@@ -1,9 +1,9 @@
 """
-Core decision engine (AltaQuant 3-Layer Defense)
+Core decision engine (AltaQuant 3-Layer Matrix)
 Strategy Hierarchy:
-1. Tier 1 (Perfect): H4+H1+M30+M15 (The Standard)
-2. Tier 2 (Momentum): H4+H1+M15 (Super Trend Bypass)
-3. Tier 3 (Reaction): H4+H1+M15 (Local SnR/SnD Bounce/Breakout Fallback)
+1. Tier 1 (Sniper Elite): M30 Setup + M15 Trigger (High Prob, Full Risk)
+2. Tier 2 (Assault): Super Trend (ADX > 35) + M15 Trigger (High Momentum, Full Risk)
+3. Tier 3 (Guerrilla): No M30 Setup + M15 Local Reaction (Recovery, Reduced Risk)
 """
 
 from typing import Any, Dict, List, Optional
@@ -27,149 +27,171 @@ def final_decision(
     notes = []
     
     # ============================================================
-    # STEP 1: GLOBAL FILTER (H4 Anchor & H1 Bias) - WAJIB LULUS
+    # 🛡️ STEP 0: THE GATEKEEPER (Global Filter)
     # ============================================================
-    # Ini adalah "Gerbang Utama". Jika trend besar tidak mendukung, 
-    # tidak ada metode apapun (1, 2, atau 3) yang boleh jalan.
+    # Syarat Mutlak: H4 Trend Valid & H1 Bias Aligned & User Pattern Valid
+    # Jika gagal di sini, tidak ada Tier yang boleh jalan.
+    
     tech_audit = evaluate_technical(technical_data)
     
     if not tech_audit.get("valid", False):
         return {
             "status": "NO_TRADE", 
-            "reason": f"Global Filter Failed: {tech_audit.get('reason')}", 
+            "reason": f"Gatekeeper Blocked: {tech_audit.get('reason')}", 
             "notes": notes
         }
 
     direction = tech_audit.get("direction")
-    confidence = 0.80 # Base confidence awal
+    base_confidence = 0.80 
 
     # ============================================================
-    # STEP 2: FUNDAMENTAL & EVENT FILTER
+    # 🛡️ STEP 0.5: EXTERNAL FILTERS
     # ============================================================
+    # Cek Fundamental (Berita) & Event Blackout
     fundamental = FundamentalEngine().evaluate(fundamental_signals)
     if fundamental.get("action") == "BLOCK":
-        return {
-            "status": "BLOCKED_BY_FUNDAMENTAL", 
-            "detail": fundamental, 
-            "notes": notes
-        }
+        return {"status": "BLOCKED_BY_FUNDAMENTAL", "detail": fundamental, "notes": notes}
     
     if fundamental.get("action") == "REDUCE_SIZE":
-        notes.append("Fundamental warning: Size reduced.")
-        confidence -= 0.1
+        notes.append("⚠️ Fundamental Warning (Size Reduced)")
+        base_confidence -= 0.1
 
     event_times = technical_data.get("events", [])
     if not EventBlackout(events=event_times).is_allowed():
         return {"status": "EVENT_BLACKOUT", "reason": "Macro Event Window", "notes": notes}
 
     # ============================================================
-    # STEP 3: ANALISA MIKRO (STRATEGY SELECTION MATRIX)
+    # ⚔️ STEP 1: STRATEGY MATRIX (THE WATERFALL)
     # ============================================================
     
     # A. Data Gathering
     trend_h4_data = technical_data.get("trend_h4", {})
-    adx_val = trend_h4_data.get("adx", 0)
+    adx_val = float(trend_h4_data.get("adx", 0))
     
     df_m30 = technical_data.get("df_m30")
-    m30_setup = detect_liquidity_setup(df_m30, direction) # Cek Zone/Sweep
+    # Cek M30 Zone/Liquidity (Syarat Tier 1)
+    m30_setup = detect_liquidity_setup(df_m30, direction) 
     
     df_m15 = technical_data.get("df_m15")
-    m15_exec = detect_m15_execution(df_m15, direction)    # Cek Breakout/Bounce
+    # Cek M15 Breakout/Bounce (Syarat Wajib Semua Tier)
+    m15_exec = detect_m15_execution(df_m15, direction)    
     
-    # Thresholds
-    IS_SUPER_TREND = adx_val >= 35.0
+    # Logic Variables
+    is_super_trend = adx_val >= config.ADX_SUPER_TREND
     
-    # B. Decision Logic (3 Metode Saling Membantu)
     final_status = "WAITING"
-    final_reason = "No Valid Setup Found"
+    final_reason = "No Setup Matches Matrix"
     strategy_used = "None"
-    structure_levels = {}
+    structure_levels_for_risk = {}
+    applied_risk_scale = 1.0
 
-    # --- METODE 1: STRICT WATERFALL (The Perfect Setup) ---
+    # ------------------------------------------------------------
+    # 🥇 TIER 1: THE SNIPER ELITE (Ideal Setup)
+    # Syarat: M30 Zone/Sweep VALID + M15 Trigger VALID
+    # ------------------------------------------------------------
     if m30_setup["valid"]:
         if m15_exec["valid"]:
             final_status = "EXECUTE"
-            strategy_used = "Tier 1: Structural Setup (M30+M15)"
+            strategy_used = "Tier 1: Sniper Elite (M30 Sweep + M15 Trig)"
             notes.append(f"M30: {m30_setup.get('detail')}")
             notes.append(f"M15: {m15_exec.get('detail')}")
-            structure_levels = m30_setup.get("levels") # Prioritas level M30
+            # Sniper pakai level struktur M30 (lebih kuat)
+            structure_levels_for_risk = m30_setup.get("levels") 
+            applied_risk_scale = 1.0
         else:
             final_status = "WAIT_FOR_TRIGGER"
-            final_reason = f"M30 Ready ({m30_setup.get('detail')}), Waiting M15 Trigger"
-            notes.append(f"M30: {m30_setup.get('detail')}")
+            final_reason = f"Tier 1 Active: M30 Ready ({m30_setup.get('detail')}), Waiting M15"
+            notes.append(f"M30 Locked: {m30_setup.get('detail')}")
 
-    # --- METODE 2: MOMENTUM BYPASS (The Fast Lane) ---
-    elif IS_SUPER_TREND:
+    # ------------------------------------------------------------
+    # 🥈 TIER 2: THE ASSAULT (Momentum Bypass)
+    # Syarat: Super Trend (ADX > 35) + M15 Trigger VALID
+    # (M30 Setup di-bypass karena tren terlalu kencang)
+    # ------------------------------------------------------------
+    elif is_super_trend:
         if m15_exec["valid"]:
             final_status = "EXECUTE"
-            strategy_used = "Tier 2: Momentum Bypass (Super Trend)"
-            notes.append(f"⚠️ M30 Skipped (ADX {adx_val:.1f} > 35)")
+            strategy_used = "Tier 2: Assault (Super Trend Bypass)"
+            notes.append(f"🚀 Super Trend (ADX {adx_val:.1f}). M30 Bypassed.")
             notes.append(f"M15: {m15_exec.get('detail')}")
-            structure_levels = m15_exec.get("levels") # Pakai level M15 karena M30 skip
-            confidence -= 0.05 # Sedikit diskon karena skip M30
+            # Assault pakai level struktur M15 (karena M30 dilewati)
+            structure_levels_for_risk = m15_exec.get("levels")
+            applied_risk_scale = 1.0
+            base_confidence -= 0.05 
         else:
             final_status = "WAIT_FOR_TRIGGER"
-            final_reason = "Super Trend Active, Waiting M15 Trigger"
+            final_reason = "Tier 2 Active: Super Trend, Waiting M15 Impulse"
 
-    # --- METODE 3: SnR/SnD REACTION FALLBACK (The Guerilla) ---
-    # Jika M30 gagal & Tren tidak super kuat, TAPI harga bereaksi di level lokal M15
+    # ------------------------------------------------------------
+    # 🥉 TIER 3: THE GUERRILLA (Local Reaction)
+    # Syarat: M30 Gagal, Tren Normal (ADX > 20), TAPI M15 Reaksi Bagus
+    # Risk: Reduced (70%)
+    # ------------------------------------------------------------
     elif m15_exec["valid"]:
-        # Pastikan ini bukan "False Signal" di pasar mati
-        # Syarat tambahan: Minimal ADX H4 > 20 (sudah lolos di step 1) 
-        # dan M15 volume valid
-        
+        # Gatekeeper sudah memastikan ADX > 20 dan Tren Valid
         final_status = "EXECUTE"
-        strategy_used = "Tier 3: Local SnR/SnD Reaction"
-        notes.append("⚠️ M30 Zone Missed, using Local M15 Levels")
+        strategy_used = "Tier 3: Guerrilla (Local Reaction Fallback)"
+        notes.append("⚠️ M30 Zone Missed. Using Local M15 Reaction.")
         notes.append(f"M15: {m15_exec.get('detail')}")
-        structure_levels = m15_exec.get("levels")
-        confidence -= 0.15 # Diskon confidence lebih besar karena tanpa M30 Zone
-    
+        
+        # Guerrilla pakai level lokal M15
+        structure_levels_for_risk = m15_exec.get("levels")
+        
+        # SAFETY FIRST: Kurangi resiko sesuai Config
+        applied_risk_scale = config.TIER_3_RISK_SCALE 
+        base_confidence -= 0.15 
+
     else:
-        # Jika ketiga metode gagal
+        # Jika Tier 1 gagal trigger, Tier 2 syarat ADX tak penuhi, Tier 3 M15 tak valid
         final_status = "WAIT_FOR_SETUP"
-        final_reason = f"No M30 Setup, No Super Trend, No Local Trigger. (M30: {m30_setup.get('reason')})"
+        final_reason = f"No Setup. (M30: {m30_setup.get('reason')}) (ADX: {adx_val:.1f})"
 
     # ============================================================
-    # STEP 4: FINAL CHECK & RISK SIZING
+    # 📝 STEP 2: EXECUTION & SIZING
     # ============================================================
     
     if final_status == "EXECUTE":
-        # Cek Anomali Akhir
+        # 1. Anomaly Check (Pump/Dump Detector)
         anomaly = detect_anomaly(df_m15)
         if anomaly["anomaly"]:
             severity = anomaly["severity"]
             if severity >= 0.95:
                  return {"status": "NO_TRADE", "reason": "Severe Anomaly (Pump/Dump)", "anomaly": anomaly}
-            confidence *= (1.0 - 0.4 * severity)
+            base_confidence *= (1.0 - 0.4 * severity)
             notes.append(f"Anomaly severity {severity:.2f}")
 
-        # Risk Calculation
-        risk_pct = config.RISK_PCT
+        # 2. Risk Calculation
+        base_risk_pct = config.RISK_PCT
+        
+        # Fundamental Modifier
         if fundamental.get("action") == "REDUCE_SIZE":
-            risk_pct /= 2
+            base_risk_pct /= 2
         
-        # Adjust risk berdasarkan Tier Strategy
-        if "Tier 3" in strategy_used:
-            risk_pct *= 0.7 # Kurangi size untuk setup Tier 3 (High Risk)
+        # Strategy Matrix Modifier (Apply Tier Scale)
+        final_risk_pct = base_risk_pct * applied_risk_scale
 
-        risk_engine = RiskEngine(equity, risk_pct)
+        risk_engine = RiskEngine(equity, final_risk_pct)
         
-        # Pastikan kita punya level struktur (Support/Resistance)
-        final_levels = structure_levels if structure_levels else m15_exec.get("levels", {})
+        # Fallback Level jika structure kosong (seharusnya tidak terjadi jika structure.py benar)
+        if not structure_levels_for_risk:
+            structure_levels_for_risk = m15_exec.get("levels", {})
 
         risk_calc = risk_engine.calculate(
             entry=entry_price, 
             atr=atr, 
             direction=direction, 
-            structure=final_levels
+            structure=structure_levels_for_risk
         )
+        
+        # Info tambahan di notes risiko
+        if applied_risk_scale < 1.0:
+            risk_calc["note"] += f" (Reduced Size: {applied_risk_scale*100:.0f}%)"
 
         return {
             "status": "EXECUTE",
             "direction": direction,
-            "confidence": round(confidence, 2),
-            "strategy": strategy_used, # Info strategi untuk UI
+            "confidence": round(base_confidence, 2),
+            "strategy": strategy_used,
             "risk": risk_calc,
             "fundamental": fundamental,
             "notes": notes

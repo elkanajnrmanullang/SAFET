@@ -74,6 +74,16 @@ st.markdown("""
         color: #e2e8f0;
         line-height: 1.6;
     }
+    
+    .strategy-tag {
+        background-color: #312e81;
+        color: #a5b4fc;
+        padding: 2px 8px;
+        border-radius: 4px;
+        font-size: 0.75rem;
+        border: 1px solid #4338ca;
+        margin-left: 10px;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -87,7 +97,12 @@ def render_analysis_card(symbol, screener_res, result_json=None):
     
     # Tentukan Status Header & Warna
     status_code = decision.get("status", "ANALYZING")
+    strategy_name = decision.get("strategy", "None")
     
+    status_color = "header-wait"
+    icon = "⏳"
+    main_status = f"WAITING ({status_code})"
+
     if screener_res["status"] == "FAIL":
         status_color = "header-fail"
         main_status = "REJECTED (SCREENING)"
@@ -104,16 +119,15 @@ def render_analysis_card(symbol, screener_res, result_json=None):
         status_color = "header-fail"
         main_status = "NO TRADE / BLOCKED"
         icon = "🛑"
-    else:
-        status_color = "header-wait"
-        main_status = f"WAITING ({status_code})"
-        icon = "⏳"
 
     # 1. BUKA CONTAINER (Start HTML Div)
     st.markdown(f"""
     <div class="card-container {status_color}">
         <div style="display:flex; justify-content:space-between; align-items:center;">
-            <h2 style="margin:0; color: #f8fafc;">{icon} {symbol}</h2>
+            <div style="display:flex; align-items:center;">
+                <h2 style="margin:0; color: #f8fafc;">{icon} {symbol}</h2>
+                {f'<span class="strategy-tag">{strategy_name}</span>' if strategy_name != "None" else ''}
+            </div>
             <h3 style="margin:0; color: #cbd5e1;">{main_status}</h3>
         </div>
     """, unsafe_allow_html=True)
@@ -144,9 +158,9 @@ def render_analysis_card(symbol, screener_res, result_json=None):
         conf = vision.get('confidence', 0)
         st.info(f"**Detected:** {pat} ({sent}) • Confidence: {conf:.0%}")
 
-    # 4. WATERFALL ANALYSIS (4-COLUMNS)
+    # 4. WATERFALL ANALYSIS (3-TIER MATRIX DISPLAY)
     if decision:
-        st.markdown('<div class="sub-section"><div class="sub-title">TAHAP 1 — WATERFALL ANALYSIS (H4 → H1 → M30 → M15)</div>', unsafe_allow_html=True)
+        st.markdown('<div class="sub-section"><div class="sub-title">TAHAP 1 — STRATEGY MATRIX (WATERFALL)</div>', unsafe_allow_html=True)
         
         fund = decision.get("fundamental", {})
         fund_flag = fund.get("flag", "GREEN")
@@ -169,36 +183,45 @@ def render_analysis_card(symbol, screener_res, result_json=None):
         """, unsafe_allow_html=True)
         
         # B. H1 (Bias)
-        # Logika bias disimpulkan dari apakah status lanjut atau tidak
-        h1_aligned = decision.get("status") not in ["NO_TRADE"] or "H1" not in decision.get("reason", "")
-        h1_color = "#10b981" if h1_aligned and h4_valid else "#64748b"
-        if not h4_valid: h1_color = "#64748b"
-        elif "H1" in decision.get("reason", ""): h1_color = "#ef4444"
-
+        # Logika bias: Jika NO_TRADE karena H1, maka merah. Jika status lanjut, hijau.
+        h1_msg = decision.get("reason", "")
+        h1_ok = "H1" not in h1_msg and "Gatekeeper" not in h1_msg
+        h1_color = "#10b981" if h1_ok and h4_valid else "#64748b"
+        
         col_h1.markdown(f"""
         <div class="logic-box" style="border-left: 4px solid {h1_color};">
             <span class="logic-title">TF H1 (Bias)</span>
-            <span style="color: {h1_color}; font-weight:bold;">{"ALIGNED" if h1_aligned else "DIVERGENCE"}</span>
+            <span style="color: {h1_color}; font-weight:bold;">{"ALIGNED" if h1_ok else "CONFLICT"}</span>
             <span class="logic-desc">Price vs EMA50</span>
         </div>
         """, unsafe_allow_html=True)
 
-        # C. M30 (Setup)
+        # C. M30 (Setup) - DINAMIS SESUAI STRATEGI
         notes = decision.get("notes", [])
-        m30_note = next((n for n in notes if "M30" in n), None)
+        m30_note = next((n for n in notes if "M30" in n), "-")
+        
+        # Default State
         m30_status = "WAITING"
+        m30_desc = "Scanning Zone..."
         m30_color = "#64748b"
 
-        if decision.get("status") == "WAIT_FOR_SETUP":
-            m30_status = "NO SETUP"
-            m30_color = "#f59e0b"
-        elif m30_note:
-            m30_status = "READY"
+        # Logic Matrix
+        if "Tier 2" in strategy_name:
+            m30_status = "BYPASSED 🚀"
+            m30_desc = "Super Trend (ADX > 35)"
+            m30_color = "#f59e0b" # Orange Warning
+        elif "Tier 3" in strategy_name:
+            m30_status = "SKIPPED 🛡️"
+            m30_desc = "Local Reaction Only"
+            m30_color = "#64748b" # Grey
+        elif "Tier 1" in strategy_name:
+            m30_status = "READY ✅"
+            m30_desc = m30_note.replace("M30: ", "")
             m30_color = "#10b981"
-        elif not h4_valid:
-            m30_status = "LOCKED"
-        
-        m30_desc = m30_note.replace("M30: ", "") if m30_note else "Zone / Liquidity Scan"
+        elif decision.get("status") == "WAIT_FOR_SETUP":
+             m30_status = "NO SETUP"
+             m30_desc = "No Zone / Sweep"
+             m30_color = "#ef4444"
 
         col_m30.markdown(f"""
         <div class="logic-box" style="border-left: 4px solid {m30_color};">
@@ -209,7 +232,7 @@ def render_analysis_card(symbol, screener_res, result_json=None):
         """, unsafe_allow_html=True)
 
         # D. M15 (Trigger)
-        m15_note = next((n for n in notes if "M15" in n), None)
+        m15_note = next((n for n in notes if "M15" in n), "-")
         m15_color = "#64748b"
         m15_status = "LOCKED"
 
@@ -217,10 +240,10 @@ def render_analysis_card(symbol, screener_res, result_json=None):
             m15_status = "WAIT TRIGGER"
             m15_color = "#f59e0b"
         elif decision.get("status") == "EXECUTE":
-            m15_status = "FIRED"
+            m15_status = "FIRED 🔥"
             m15_color = "#10b981"
         
-        m15_desc = m15_note.replace("M15: ", "") if m15_note else "Breakout / Bounce"
+        m15_desc = m15_note.replace("M15: ", "") if m15_note != "-" else "Breakout / Bounce"
 
         col_m15.markdown(f"""
         <div class="logic-box" style="border-left: 4px solid {m15_color};">
@@ -249,7 +272,10 @@ def render_analysis_card(symbol, screener_res, result_json=None):
             r2.metric("Entry", f"${risk.get('entry', 0):,.4f}")
             r3.metric("Stop Loss", f"${risk.get('stop_loss', 0):,.4f}")
             r4.metric("Take Profit", f"${risk.get('take_profit', 0):,.4f}")
-            st.success(f"Position Size: {risk.get('position_size')} Units | Risk: ${risk.get('risk_amount')} (1%)")
+            
+            # Tampilkan Risk Note (terutama jika ada Scaling Tier 3)
+            risk_note = risk.get('note', '')
+            st.success(f"Position Size: {risk.get('position_size')} Units | Risk: ${risk.get('risk_amount')} ({risk_note})")
 
     # 5. TUTUP CONTAINER (Close HTML Div)
     st.markdown("</div>", unsafe_allow_html=True) 
@@ -258,7 +284,7 @@ def render_analysis_card(symbol, screener_res, result_json=None):
 # MAIN APP LOGIC
 # =============================
 st.title("AltaQuant • Institutional Grade DSS")
-st.markdown("Automated Screening & Waterfall Analysis System")
+st.markdown("Automated Screening & 3-Layer Strategy Matrix")
 
 screener = CryptoScreener()
 
@@ -314,11 +340,11 @@ if mode == "Auto-Scanner (Hunter)":
         
         with diamonds_container:
             st.markdown("### 💎 DIAMONDS (Ready to Execute)")
-            st.caption("Setup yang sudah lolos H4, H1, M30, dan Triggered di M15.")
+            st.caption("Setup yang lolos salah satu dari 3 Tier Strategy.")
             
         with watchlist_container:
             st.markdown("### 👀 WATCHLIST (Near Entry)")
-            st.caption("Setup valid di M30 (Zone/Sweep), menunggu trigger M15.")
+            st.caption("Setup valid yang menunggu trigger M15.")
 
         found_diamonds = []
         found_watchlist = []
@@ -352,7 +378,8 @@ if mode == "Auto-Scanner (Hunter)":
                 
                 # KATEGORISASI HASIL
                 if status_code == "EXECUTE":
-                    add_log(f"   💎 {sym}: DIAMOND FOUND! {decision['direction']}")
+                    strategy = decision.get("strategy", "Unknown")
+                    add_log(f"   💎 {sym}: EXECUTE! ({strategy})")
                     found_diamonds.append({
                         "symbol": sym, "screen": screen_res, "result": result_json
                     })

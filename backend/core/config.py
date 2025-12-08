@@ -8,7 +8,7 @@ Seluruh parameter inti AI Trading dipusatkan agar:
 """
 
 class AIConfig:
-    VERSION = "AI-Core-Config-3.1-AltaQuant"
+    VERSION = "AI-Core-Config-3.3-Matrix" # Update Version
 
     # =====================================================
     # Market Data
@@ -21,6 +21,10 @@ class AIConfig:
     # Technical Evaluator
     # =====================================================
     TREND_STRONG_THRESHOLD = 0.65  # min strength long/short
+    
+    # [NEW] Strategy Matrix Thresholds
+    ADX_SUPER_TREND = 35.0       # Batas ADX untuk masuk Tier 2 (Assault)
+    TIER_3_RISK_SCALE = 0.7      # Risk modifier untuk Tier 3 (Guerrilla / 70% Size)
 
     # =====================================================
     # Microstructure (CHOCH/BOS)

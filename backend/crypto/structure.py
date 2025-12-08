@@ -30,36 +30,32 @@ def _get_local_sr(df, window=20):
     return res_level, sup_level
 
 def _analyze_volume_trend(df, lookback=5):
-    """
-    Menganalisa apakah volume sedang Meningkat (Strong) atau Melemah (Weak)
-    dalam n-candle terakhir.
-    """
     recent_vol = df['volume'].tail(lookback).values
-    # Hitung rata-rata perubahan (slope)
     if len(recent_vol) < 2: return "NEUTRAL"
-    
     slope = np.polyfit(range(len(recent_vol)), recent_vol, 1)[0]
-    
     current_vol = recent_vol[-1]
     avg_vol = df['volume'].tail(20).mean()
-    
     is_increasing = slope > 0 and current_vol > avg_vol
-    is_decreasing = slope < 0 or current_vol < avg_vol
-    
     return "INCREASING" if is_increasing else "DECREASING"
 
 def detect_m15_execution(df_m15, direction):
     """
     [DEFAULT STRATEGY] Analisa M15 Advanced:
-    - Breakout + High Vol
-    - Bounce/Pullback + Low Vol
+    - Breakout + High Vol (Assault Trigger)
+    - Bounce/Pullback + Low Vol (Sniper/Guerrilla Trigger)
+    
+    PENTING: Selalu return 'levels' lokal M15 untuk Tier 2 & 3.
     """
     if df_m15 is None or len(df_m15) < 30:
-        return {"valid": False, "reason": "M15 Data Insufficient"}
+        return {
+            "valid": False, 
+            "reason": "M15 Data Insufficient", 
+            "levels": {"support": 0, "resistance": 0}
+        }
 
     last = df_m15.iloc[-1]
     
-    # 1. Identifikasi Level Kunci
+    # 1. Identifikasi Level Kunci M15 (Lokal)
     res, sup = _get_local_sr(df_m15)
     
     # 2. Analisa Volume
@@ -77,58 +73,58 @@ def detect_m15_execution(df_m15, direction):
     
     # === LOGIC UNTUK POSISI LONG ===
     if direction == "LONG":
-        # A. Breakout Resistance (Penerusan)
+        # A. Breakout Resistance (Penerusan - Cocok untuk Assault)
         if last['close'] > res and (vol_trend == "INCREASING" or vol_spike):
             valid_trigger = True
             detail_msg = "🔥 Breakout Resistance + High Vol"
             
-        # B. Bounce at Support/Pullback (Pantulan)
+        # B. Bounce at Support/Pullback (Pantulan - Cocok untuk Sniper/Guerrilla)
+        # Toleransi area 0.5% dari support
         elif abs(last['low'] - sup) / sup < 0.005: 
             if lower_wick > body: 
                 valid_trigger = True
-                detail_msg = "🪃 Bounce Support (Pinbar)"
+                detail_msg = "🪤 Bounce Support (Pinbar)"
             elif is_bullish and vol_trend == "DECREASING":
                 valid_trigger = True
                 detail_msg = "📉 Pullback Entry (Vol Dried Up)"
+        
+        # C. Impulse Candle (Backup untuk Assault jika tidak ada level struktur jelas)
+        elif vol_spike and is_bullish and body > (upper_wick + lower_wick):
+            valid_trigger = True
+            detail_msg = "🚀 Momentum Impulse (Mid-Range)"
 
     # === LOGIC UNTUK POSISI SHORT ===
     elif direction == "SHORT":
-        # A. Breakdown Support (Penerusan)
+        # A. Breakdown Support (Penerusan - Cocok untuk Assault)
         if last['close'] < sup and (vol_trend == "INCREASING" or vol_spike):
             valid_trigger = True
             detail_msg = "🔥 Breakdown Support + High Vol"
             
-        # B. Rejection at Resistance (Pantulan)
+        # B. Rejection at Resistance (Pantulan - Cocok untuk Sniper/Guerrilla)
         elif abs(last['high'] - res) / res < 0.005:
             if upper_wick > body: 
                 valid_trigger = True
-                detail_msg = "🪃 Reject Resistance (Pinbar)"
+                detail_msg = "🪤 Reject Resistance (Pinbar)"
             elif not is_bullish and vol_trend == "DECREASING":
                 valid_trigger = True
                 detail_msg = "📉 Pullback Entry (Vol Dried Up)"
 
-    # Default Impulse Check (Fallback)
-    if not valid_trigger:
-        if vol_spike and body > (upper_wick + lower_wick):
-             if (direction == "LONG" and is_bullish) or (direction == "SHORT" and not is_bullish):
-                 valid_trigger = True
-                 detail_msg = "🚀 Momentum Impulse (Mid-Range)"
+        # C. Impulse Candle (Backup untuk Assault)
+        elif vol_spike and not is_bullish and body > (upper_wick + lower_wick):
+             valid_trigger = True
+             detail_msg = "🚀 Momentum Impulse (Mid-Range)"
 
     # --- RETURN RESULT WITH LEVELS ---
+    # Kita selalu return levels (sup/res) lokal M15 meskipun valid=False
+    # Agar Engine bisa pakai data ini jika diperlukan untuk Risk Calculation
     result_data = {
-        "valid": False, 
-        "reason": "No Valid Setup",
-        "levels": {"support": sup, "resistance": res}  # <--- DATA UNTUK RISK ENGINE
+        "valid": valid_trigger, 
+        "reason": detail_msg if valid_trigger else "No Valid M15 Trigger",
+        "detail": detail_msg,
+        "levels": {"support": sup, "resistance": res}  # <--- DATA VITAL UNTUK TIER 2 & 3
     }
 
-    if not valid_trigger:
-        result_data["reason"] = "No Valid Setup (Wait for Breakout or Bounce)"
-        return result_data
-        
-    result_data["valid"] = True
-    result_data["detail"] = detail_msg
     return result_data
-
 
 # ==============================================================================
 # STRATEGY 2: BASIC / ALTERNATIVE (Liquidity Sweep & Simple Impulse)
