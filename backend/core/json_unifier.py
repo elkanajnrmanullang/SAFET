@@ -1,23 +1,9 @@
-"""
-JSON Structure Unifier
-----------------------
-Tujuan:
-- Menyatukan format output dari seluruh modul (technical, microstructure,
-  risk, hedge, vision pattern, explainability)
-- Memastikan AI Engine selalu mengirim JSON final yang clean, aman,
-  dan siap dikonsumsi oleh LLM / Dashboard / Execution Layer.
-"""
-
 from typing import Dict, Any
 
 class JSONUnifier:
 
     @staticmethod
     def unify(ctx: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        ctx: raw pipeline context
-        output: final standardized JSON object
-        """
 
         return {
             "meta": {
@@ -28,7 +14,6 @@ class JSONUnifier:
             "market": {
                 "symbol": ctx.get("symbol"),
                 "price": ctx.get("price"),
-                # Pastikan ini mengambil data yang benar dari context
                 "trend_4h": ctx.get("trend_h4", {}).get("direction", "NEUTRAL"),
                 "atr": ctx.get("atr")
             },

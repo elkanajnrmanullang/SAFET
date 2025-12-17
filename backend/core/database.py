@@ -1,9 +1,3 @@
-"""
-Database helper (SQLite) for trade history and adaptive learning rules.
-Improved: ensures data directory exists, safer parameterized queries,
-additional helper functions for saving AI decision records and retrieving them.
-"""
-
 import sqlite3
 import json
 import os
@@ -56,11 +50,6 @@ def init_db():
 
 # --- HISTORY FUNCTIONS ---
 def save_trade(symbol: str, decision: Dict[str, Any]) -> int:
-    """
-    Save a trade decision into trade_history.
-    decision: the full decision dict from ai_engine including risk dict.
-    Returns: inserted row id
-    """
     conn = _get_conn()
     c = conn.cursor()
     now = datetime.utcnow().isoformat()
@@ -175,7 +164,6 @@ init_db()
 
 # quick self-test
 if __name__ == "__main__":
-    # create demo entry
     sample = {
         "status": "EXECUTE",
         "direction": "LONG",

@@ -1,18 +1,8 @@
-"""
-Risk Engine (Structure Based)
----------------------------------
-Menghitung SL berdasarkan Invalidation Point (Support/Resistance)
-Rule:
-1. SL = Structure Level +/- (0.5 * ATR)
-2. TP = Fixed Risk:Reward 1:2
-"""
-
 import numpy as np
 import pandas as pd
 from typing import Dict, Any
 
-# Import Config untuk mendapatkan ATR Multiplier
-from backend.core.config import config as core_config # <-- IMPORT BARU
+from backend.core.config import config as core_config
 
 class RiskEngine:
     def __init__(self, balance: float, risk_pct: float = 0.01):
@@ -20,55 +10,40 @@ class RiskEngine:
         self.risk_pct = float(risk_pct)
 
     def calculate(self, entry: float, atr: float, direction: str, structure: Dict[str, float] = None) -> Dict[str, Any]:
-        """
-        Menghitung SL/TP Strategis sesuai dokumen.
-        """
         entry = float(entry)
         atr = float(atr)
         
-        # 1. Tentukan Buffer (Napas Tambahan)
-        # WAJIB: Invalidation Point + 0.5 ATR
-        buffer = atr * core_config.ATR_MULTIPLIER_SL # <-- Menggunakan config (0.5)
+        buffer = atr * core_config.ATR_MULTIPLIER_SL 
 
-        # Ambil level struktur dari M30/M15 (yang dikirim dari engine.py)
-        # Fallback jika struktur gagal terdeteksi: Pakai 1.5 ATR (standard swing)
         sup = structure.get('support') if structure else (entry - atr * 1.5)
         res = structure.get('resistance') if structure else (entry + atr * 1.5)
 
-        # 2. Hitung Harga Stop Loss (SL)
         if direction.upper() == "LONG":
-            # SL = Support - Buffer (Long SL di bawah Support)
             sl_price = sup - buffer
             
-            # Safety Check: SL tidak boleh di atas Entry (Fatal logic error)
             if sl_price >= entry: 
-                sl_price = entry - (atr * 1.0) # Fallback darurat
+                sl_price = entry - (atr * 1.0) 
                 
         elif direction.upper() == "SHORT":
-            # SL = Resistance + Buffer (Short SL di atas Resistance)
             sl_price = res + buffer
             
-            # Safety Check: SL tidak boleh di bawah Entry
             if sl_price <= entry: 
-                sl_price = entry + (atr * 1.0) # Fallback darurat
+                sl_price = entry + (atr * 1.0) 
         else:
             sl_price = entry - (atr * 1.0)
 
-        # 3. Hitung Jarak Risiko (Risk Distance per Koin)
         risk_dist = abs(entry - sl_price)
         
         if risk_dist == 0:
-            risk_dist = entry * 0.01 # Prevent division by zero
+            risk_dist = entry * 0.01 
 
-        # 4. Hitung Take Profit (TP) -> TARGET FIXED RATIO 1:2
-        rr_ratio = core_config.ATR_MULTIPLIER_TP # Menggunakan config (2.0)
+        rr_ratio = core_config.ATR_MULTIPLIER_TP 
         
         if direction.upper() == "LONG":
             tp_price = entry + (risk_dist * rr_ratio)
         else:
             tp_price = entry - (risk_dist * rr_ratio)
 
-        # 5. Position Sizing
         risk_amount_usd = self.balance * self.risk_pct
         position_size = risk_amount_usd / risk_dist
 
@@ -83,7 +58,6 @@ class RiskEngine:
             "note": "SL @ Structure + 0.5 ATR Buffer"
         }
 
-    # Helper volatility calculation
     def calc_volatility(self, df: pd.DataFrame) -> float:
         returns = df["close"].pct_change().dropna()
         return float(returns.std())

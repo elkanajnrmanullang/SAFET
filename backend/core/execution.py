@@ -1,10 +1,3 @@
-"""
-Execution helper for placing orders on exchange.
-Wrapper supports:
-- real Binance client (ccxt or python-binance-like clients)
-- simulation mode controlled by env SIMULATE_TRADES=1
-"""
-
 import os
 import math
 from typing import Dict, Any
@@ -14,13 +7,6 @@ SIMULATE = os.getenv("SIMULATE_TRADES", "1") == "1"
 
 
 def execute_trade(client, symbol: str, decision: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    client: exchange client supporting similar methods as python-binance or ccxt.
-    decision: dict produced by ai_engine.final_decision
-
-    Returns:
-      {"status": "ORDER_SENT"|"SIMULATED"|"NO_ACTION", "details": {...}}
-    """
     if not decision or decision.get("status") != "EXECUTE":
         return {"status": "NO_ACTION", "details": decision}
 
@@ -48,8 +34,7 @@ def execute_trade(client, symbol: str, decision: Dict[str, Any]) -> Dict[str, An
                 }
             }
 
-        # Real execution (example for python-binance-like client)
-        # try ccxt style first (unified)
+        # Real execution 
         if hasattr(client, "create_order"):
             order = client.create_order(
                 symbol=symbol.replace("/", ""),
@@ -59,9 +44,7 @@ def execute_trade(client, symbol: str, decision: Dict[str, Any]) -> Dict[str, An
             )
             return {"status": "ORDER_SENT", "details": order}
 
-        # python-binance style (futures_create_order)
         if hasattr(client, "futures_create_order"):
-            # ensure margin type isolated (best-effort)
             try:
                 if hasattr(client, "futures_change_margin_type"):
                     client.futures_change_margin_type(symbol=symbol.replace("/", ""), marginType="ISOLATED")
@@ -76,7 +59,6 @@ def execute_trade(client, symbol: str, decision: Dict[str, Any]) -> Dict[str, An
             )
             return {"status": "ORDER_SENT", "details": order}
 
-        # unsupported client
         return {"status": "NO_ACTION", "reason": "unsupported_client", "details": decision}
 
     except Exception as e:

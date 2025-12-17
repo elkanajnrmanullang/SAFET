@@ -1,18 +1,9 @@
-"""
-Core decision engine (AltaQuant 3-Layer Matrix)
-Strategy Hierarchy:
-1. Tier 1 (Sniper Elite): M30 Setup + M15 Trigger (High Prob, Full Risk)
-2. Tier 2 (Assault): Super Trend (ADX > 35) + M15 Trigger (High Momentum, Full Risk)
-3. Tier 3 (Guerrilla): No M30 Setup + M15 Local Reaction (Recovery, Reduced Risk)
-"""
-
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 from backend.crypto.data import evaluate_technical
-from backend.crypto.structure import detect_m15_execution, detect_liquidity_setup
+from backend.crypto.structure import analyze_structure_context, detect_liquidity_grab
+from backend.analytics.indicators import detect_fvg_zone
 from backend.analytics.fundamental import FundamentalEngine
 from backend.analytics.risk import RiskEngine
-from backend.core.blackout import EventBlackout
-from backend.analytics.anomaly import detect_anomaly
 from backend.core.config import config
 
 def final_decision(
@@ -21,208 +12,102 @@ def final_decision(
     equity: float,
     atr: float,
     entry_price: float,
-    context_meta: Optional[Dict[str, Any]] = None
+    context_meta: Dict[str, Any] = None
 ) -> Dict[str, Any]:
     
     notes = []
     
-    # ============================================================
-    # 🛡️ STEP 0: THE GATEKEEPER (Global Filter)
-    # ============================================================
-    # Syarat Mutlak: H4 Trend Valid & H1 Bias Aligned & User Pattern Valid
-    
-    tech_audit = evaluate_technical(technical_data)
-    
-    if not tech_audit.get("valid", False):
-        return {
-            "status": "NO_TRADE", 
-            "reason": f"Gatekeeper Blocked: {tech_audit.get('reason')}", 
-            "notes": notes
-        }
-
-    direction = tech_audit.get("direction")
-    base_confidence = 0.80 
-
-    # [NEW] Retrieve Volatility Status dan H4 Exhaustion
-    is_exhausted = technical_data.get("trend_h4", {}).get("exhaustion", False)
-    volatility = tech_audit.get("volatility", "NORMAL")
-    
-    # ============================================================
-    # 🛡️ STEP 0.5: EXTERNAL FILTERS
-    # ============================================================
-    # Cek Fundamental (Berita) & Event Blackout
-    fundamental = FundamentalEngine().evaluate(fundamental_signals)
-    if fundamental.get("action") == "BLOCK":
-        return {"status": "BLOCKED_BY_FUNDAMENTAL", "detail": fundamental, "notes": notes}
-    
-    if fundamental.get("action") == "REDUCE_SIZE":
-        notes.append("⚠️ Fundamental Warning (Size Reduced)")
-        base_confidence -= 0.1
-
-    event_times = technical_data.get("events", [])
-    if not EventBlackout(events=event_times).is_allowed():
-        return {"status": "EVENT_BLACKOUT", "reason": "Macro Event Window", "notes": notes}
-
-    # ============================================================
-    # ⚔️ STEP 1: STRATEGY MATRIX (THE WATERFALL)
-    # ============================================================
-    
-    # A. Data Gathering
-    trend_h4_data = technical_data.get("trend_h4", {})
-    adx_val = float(trend_h4_data.get("adx", 0))
-    
+    # Data Unpacking
+    df_h1 = technical_data.get("df_h1") 
     df_m30 = technical_data.get("df_m30")
-    m30_setup = detect_liquidity_setup(df_m30, direction) 
-    
     df_m15 = technical_data.get("df_m15")
-    # Note: Kita asumsikan detect_m15_execution sudah cukup canggih dengan logic Skenario A/B/C
-    m15_exec = detect_m15_execution(df_m15, direction, volatility) 
-    is_super_trend = adx_val >= config.ADX_SUPER_TREND
     
-    final_status = "WAITING"
-    final_reason = "No Setup Matches Matrix"
-    strategy_used = "None"
-    structure_levels_for_risk = {}
-    applied_risk_scale = 1.0
-
-    # ------------------------------------------------------------
-    # 🚩 Filter Tambahan: Volatility Gate - OVERHEAT
-    # Volatilitas ekstrem hanya mengizinkan Tier 1 (Sniper)
-    # ------------------------------------------------------------
-    if volatility == "OVERHEAT":
-        notes.append("🛑 H1 Volatility OVERHEAT - Tier 2/3 Blocked.")
-        
-        if m30_setup["valid"]:
-            if m15_exec["valid"]:
-                final_status = "EXECUTE"
-                strategy_used = "Tier 1: Sniper Elite (M30 Sweep + M15 Trig) | 🛑 Volatility Gated"
-                notes.append(f"M30: {m30_setup.get('detail')}")
-                notes.append(f"M15: {m15_exec.get('detail')}")
-                structure_levels_for_risk = m30_setup.get("levels") 
-                applied_risk_scale = 1.0
-            else:
-                final_status = "WAIT_FOR_TRIGGER"
-                final_reason = f"Tier 1 Active: M30 Ready, Waiting M15 | 🛑 Volatility Gated"
-                notes.append(f"M30 Locked: {m30_setup.get('detail')}")
-        else:
-            final_status = "NO_TRADE"
-            final_reason = f"Volatility OVERHEAT - Blocking Tier 2/3. No Tier 1 Setup."
-
-    # ------------------------------------------------------------
-    # Logika Waterfall NORMAL (Jika tidak OVERHEAT)
-    # ------------------------------------------------------------
-    else:
-        # 🥇 TIER 1: THE SNIPER ELITE (Ideal Setup)
-        if m30_setup["valid"]:
-            if m15_exec["valid"]:
-                final_status = "EXECUTE"
-                strategy_used = "Tier 1: Sniper Elite (M30 Sweep + M15 Trig)"
-                notes.append(f"M30: {m30_setup.get('detail')}")
-                notes.append(f"M15: {m15_exec.get('detail')}")
-                structure_levels_for_risk = m30_setup.get("levels") 
-                applied_risk_scale = 1.0
-            else:
-                final_status = "WAIT_FOR_TRIGGER"
-                final_reason = f"Tier 1 Active: M30 Ready ({m30_setup.get('detail')}), Waiting M15"
-                notes.append(f"M30 Locked: {m30_setup.get('detail')}")
-
-        # 🥈 TIER 2: THE ASSAULT (Momentum Bypass)
-        elif is_super_trend:
-            if m15_exec["valid"]:
-                final_status = "EXECUTE"
-                strategy_used = "Tier 2: Assault (Super Trend Bypass)"
-                notes.append(f"🚀 Super Trend (ADX {adx_val:.1f}). M30 Bypassed.")
-                notes.append(f"M15: {m15_exec.get('detail')}")
-                structure_levels_for_risk = m15_exec.get("levels")
-                applied_risk_scale = 1.0
-                base_confidence -= 0.05 
-            else:
-                final_status = "WAIT_FOR_TRIGGER"
-                final_reason = "Tier 2 Active: Super Trend, Waiting M15 Impulse"
-
-        # 🥉 TIER 3: THE GUERRILLA (Local Reaction)
-        elif m15_exec["valid"]:
-            final_status = "EXECUTE"
-            strategy_used = "Tier 3: Guerrilla (Local Reaction Fallback)"
-            notes.append("⚠️ M30 Zone Missed. Using Local M15 Reaction.")
-            notes.append(f"M15: {m15_exec.get('detail')}")
-            structure_levels_for_risk = m15_exec.get("levels")
-            applied_risk_scale = config.TIER_3_RISK_SCALE 
-            base_confidence -= 0.15 
-
-        else:
-            final_status = "WAIT_FOR_SETUP"
-            final_reason = f"No Setup. (M30: {m30_setup.get('reason')}) (ADX: {adx_val:.1f})"
-
-    # ============================================================
-    # 📝 STEP 2: EXECUTION & SIZING
-    # ============================================================
+    # Analisis Struktur Dasar
+    struct = analyze_structure_context(df_m30, df_m15, df_h1)
+    trend_h1 = struct['trend_h1']
+    direction = "LONG" if trend_h1 == "UP" else "SHORT"
     
-    if final_status == "EXECUTE":
-        # 1. Anomaly Check (Pump/Dump Detector)
-        anomaly = detect_anomaly(df_m15)
-        if anomaly["anomaly"]:
-            severity = anomaly["severity"]
-            if severity >= 0.95:
-                 return {"status": "NO_TRADE", "reason": "Severe Anomaly (Pump/Dump)", "anomaly": anomaly}
-            base_confidence *= (1.0 - 0.4 * severity)
-            notes.append(f"Anomaly severity {severity:.2f}")
-
-        # 2. Risk Calculation
-        base_risk_pct = config.RISK_PCT
-        
-        # Fundamental Modifier
-        if fundamental.get("action") == "REDUCE_SIZE":
-            base_risk_pct /= 2
+    # Deteksi Tambahan
+    fvg = detect_fvg_zone(df_m15, direction)
+    is_liq_grab, grab_level = detect_liquidity_grab(df_m15, direction)
+    
+    status = "WAIT_FOR_SETUP"
+    scenario = "None"
+    risk_calc = {}
+    
+    # SKENARIO 1: CONTINUOUS TREND DENGAN CHART PATTERN
+    if struct['pattern_h1'] != "NONE":
+        valid_pat = (trend_h1 == "UP" and "BULLISH" in struct['pattern_h1']) or \
+                    (trend_h1 == "DOWN" and "BEARISH" in struct['pattern_h1'])
+                    
+        if valid_pat:
+            status = "EXECUTE"
+            scenario = "Skenario 1: Continuous Trend + Chart Pattern"
+            notes.append(f"H1 Pattern: {struct['pattern_h1']}")
             
-        # [NEW] H4 Exhaustion Modifier (Stacks on applied_risk_scale)
-        final_applied_risk_scale = applied_risk_scale
-        if is_exhausted:
-            notes.append("⚠️ H4 Exhaustion Warning - Risk Reduced.")
-            # Risk reduction (e.g., Tier 3's 0.7 gets further reduced by 0.8)
-            final_applied_risk_scale *= config.EXHAUSTION_RISK_REDUCTION 
-        
-        # Strategy Matrix Modifier (Apply Total Risk Scale)
-        final_risk_pct = base_risk_pct * final_applied_risk_scale
-
-        risk_engine = RiskEngine(equity, final_risk_pct)
-        
-        # Fallback Level
-        if not structure_levels_for_risk:
-            structure_levels_for_risk = m15_exec.get("levels", {})
-
-        risk_calc = risk_engine.calculate(
-            entry=entry_price, 
-            atr=atr, 
-            direction=direction, 
-            structure=structure_levels_for_risk
-        )
-        
-        # Info tambahan di notes risiko
-        if final_applied_risk_scale < 1.0:
-            risk_calc["note"] += f" (Reduced Size: {final_applied_risk_scale*100:.0f}%)"
+            sl_price = entry_price - (atr * 1.5) if direction == "LONG" else entry_price + (atr * 1.5)
+            tp_price = entry_price + (abs(entry_price - sl_price) * 2) if direction == "LONG" else entry_price - (abs(entry_price - sl_price) * 2)
             
-        # Update applied_risk_scale for clean return/logging purposes
-        applied_risk_scale = final_applied_risk_scale
+            risk_calc = {
+                "entry": entry_price, "stop_loss": sl_price, "take_profit": tp_price,
+                "position_size": 1.0, "risk_amount": equity * config.RISK_PCT, "note": "SL 10 Poin Rule"
+            }
+            return _pack_result(status, direction, scenario, risk_calc, notes)
 
+    # SKENARIO 2: CONTINUOUS TREND DENGAN SnR
+    if struct['snr_status'] in ["STRONG", "INTERMEDIATE"]:
+        dist_to_snr = abs(entry_price - struct['snr_level'])
+        if dist_to_snr <= (atr * 0.5): 
+            if struct['is_weakening']:
+                status = "EXECUTE"
+                scenario = "Skenario 2: Continuous Trend + SnR"
+                notes.append(f"Bounce on {struct['snr_status']} SnR + Weakening")
+                
+                risk_engine = RiskEngine(equity, config.RISK_PCT)
+                risk_calc = risk_engine.calculate(entry_price, atr, direction, 
+                                                structure={"support": struct['snr_level'], "resistance": struct['snr_level']})
+                return _pack_result(status, direction, scenario, risk_calc, notes)
 
-        return {
-            "status": "EXECUTE",
-            "direction": direction,
-            "confidence": round(base_confidence, 2),
-            "strategy": strategy_used,
-            "risk": risk_calc,
-            "fundamental": fundamental,
-            "notes": notes
+    # SKENARIO 3: SMART MONEY CONCEPT (SMC)
+    if fvg and is_liq_grab:
+        
+        status = "EXECUTE"
+        scenario = "Skenario 3: Smart Money Concept (SMC)"
+        notes.append("Liquidity Grab + FVG Rejection")
+        
+        buffer = atr * 0.2
+        sl_price = grab_level - buffer if direction == "LONG" else grab_level + buffer
+        risk_dist = abs(entry_price - sl_price)
+        tp_price = entry_price + (risk_dist * config.SMC_RR_RATIO) if direction == "LONG" else entry_price - (risk_dist * config.SMC_RR_RATIO)
+        
+        risk_calc = {
+            "entry": entry_price, "stop_loss": sl_price, "take_profit": tp_price,
+            "position_size": 1.0, "risk_amount": equity * config.RISK_PCT, 
+            "note": f"SMC High R:R ({config.SMC_RR_RATIO}x)"
         }
+        return _pack_result(status, direction, scenario, risk_calc, notes)
 
-    # Return Waiting Status
+    # SKENARIO 5: S/D + IMBALANCE + LIQUIDITY
+    if fvg and is_liq_grab: 
+        
+        status = "WAIT_FOR_TRIGGER" 
+        scenario = "Skenario 5: S/D + Imbalance (Wait Limit)"
+        notes.append("Setup Valid. Placing Virtual Limit.")
+        return _pack_result(status, direction, scenario, {}, notes)
+
+    # SKENARIO 4: MARKET SIDEWAYS (Fallback)
+    if struct['snr_status'] == "STRONG" and not struct['pattern_h1']:
+        pass 
+
+    return _pack_result("WAIT", "NEUTRAL", "No Valid Scenario", {}, ["Scanning..."])
+
+def _pack_result(status, direction, strategy, risk, notes):
     return {
-        "status": final_status,
-        "reason": final_reason,
-        "notes": notes
+        "status": status,
+        "direction": direction,
+        "strategy": strategy,
+        "confidence": 85 if status == "EXECUTE" else 0,
+        "risk": risk,
+        "notes": notes,
+        "fundamental": {"flag": "GREEN"} 
     }
-
-def run_ai_pipeline(technical_data, fundamental_signals, equity, entry_price, context_meta=None):
-    atr = float(context_meta.get("atr", technical_data.get("atr", 0.0001)))
-    return final_decision(technical_data, fundamental_signals, equity, atr, entry_price, context_meta)

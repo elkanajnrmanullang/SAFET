@@ -1,21 +1,5 @@
-"""
-AI Performance Monitor
-----------------------
-Monitoring pipeline:
-- Latency (runtime per pipeline)
-- Success / fail rate
-- Exception tracking
-- Rolling performance window
-
-Hasilnya bisa dipakai untuk:
-- RL tuning
-- Alerting
-- Scalability audit
-"""
-
 import time
 from collections import deque
-
 
 class PerformanceMonitor:
 
@@ -35,9 +19,7 @@ class PerformanceMonitor:
         })
         return latency
 
-    # ============================
     # METRICS SUMMARY
-    # ============================
     def summary(self):
         if not self.history:
             return {"status": "no-data"}

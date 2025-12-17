@@ -1,9 +1,6 @@
 from typing import List, Dict, Any
 
-# ===========================
 # KEYWORD DICTIONARIES
-# ===========================
-
 CRITICAL_KEYWORDS = {
     "etf approval": "critical",
     "etf rejection": "critical",
@@ -15,7 +12,7 @@ CRITICAL_KEYWORDS = {
     "regulatory ban": "critical",
 }
 
-# Gabungan High Risk & On-Chain (High Priority)
+# Gabungan High Risk & On-Chain
 HIGH_RISK_KEYWORDS = {
     # Derivatives
     "funding rate extreme": "squeeze_risk",
@@ -86,7 +83,6 @@ class FundamentalEngine:
                 reasons.append(kw)
 
         # 3. Decision Logic
-        
         # A. CRITICAL override everything
         if has_critical:
             return {"flag": "RED", "action": "BLOCK", "reason": reasons}
@@ -103,13 +99,11 @@ class FundamentalEngine:
         if has_macro:
             return {"flag": "YELLOW", "action": "REDUCE_SIZE", "reason": reasons}
             
-        # D. Generic High Risk (On-chain, single derivative signal)
+        # D. Generic High Risk 
         if len(reasons) > 0:
              return {"flag": "YELLOW", "action": "REDUCE_SIZE", "reason": reasons}
 
         return {"flag": "GREEN", "action": "ALLOW_FULL", "reason": ["Clean"]}
 
-    # Text analyzer helper (tetap sama, bisa update map reference)
     def analyze_text(self, text: str) -> Dict[str, Any]:
-        # (Logika serupa dengan evaluate, disederhanakan untuk raw text)
         return self.evaluate([{"keyword": k} for k in text.lower().split() if k in {**self.critical_map, **self.high_risk_map, **self.macro_map}])

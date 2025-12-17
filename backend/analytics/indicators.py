@@ -1,15 +1,12 @@
 import pandas as pd
 import pandas_ta as ta
 import numpy as np
+from backend.core.config import config
 
-# Import ADX threshold untuk penentuan Window
-from backend.core.config import config # <-- IMPORT BARU
-
-# ================================================================
-# BASIC INDICATOR LOGIC
-# ================================================================
+# 1. BASIC HELPERS
 def compute_atr(df, length=14):
     try:
+        if "ATR" in df.columns: return df["ATR"].iloc[-1]
         atr_series = ta.atr(df["high"], df["low"], df["close"], length)
         return float(atr_series.iloc[-1])
     except:
@@ -18,21 +15,17 @@ def compute_atr(df, length=14):
 def compute_volume_ma(df, length=20):
     return df["volume"].rolling(length).mean()
 
-# [NEW] Calculate ATR SMA for H1 Volatility Check
 def compute_atr_sma(df, length=20):
-    """Menghitung Simple Moving Average dari ATR."""
     if "ATR" not in df.columns:
-        # Asumsi ATR sudah dihitung (misal di apply_indicators_by_tf)
         df["ATR"] = ta.atr(df["high"], df["low"], df["close"], 14) 
     return df["ATR"].rolling(length).mean().iloc[-1]
 
-# ================================================================
-# HIGH-LEVEL TF-BASED INDICATORS
-# ================================================================
+def compute_avg_body(df, length=10):
+    body = (df['close'] - df['open']).abs()
+    return body.rolling(window=length).mean()
+
+# 2. TIMEFRAME-BASED INDICATORS (Required by data.py)
 def apply_indicators_by_tf(df, tf):
-    """
-    Apply indicators based on specific Timeframe requirements.
-    """
     df = df.copy()
 
     # 1. Global Indicator
@@ -45,144 +38,138 @@ def apply_indicators_by_tf(df, tf):
         adx = ta.adx(df["high"], df["low"], df["close"], 14)
         if adx is not None:
             df["ADX"] = adx["ADX_14"]
-        df["RSI"] = ta.rsi(df["close"], 14) # <-- NEW
+        df["RSI"] = ta.rsi(df["close"], 14)
 
-    # 3. H1 (Bias): EMA50, ATR, RSI (for Volatility Gate & Divergence Check)
+    # 3. H1 (Bias): EMA50, ATR, RSI (for Volatility Gate)
     elif tf == "1h":
         df["EMA50"] = ta.ema(df["close"], 50)
-        df["ATR"] = ta.atr(df["high"], df["low"], df["close"], 14) # <-- NEW
-        df["RSI"] = ta.rsi(df["close"], 14) # <-- NEW
+        df["ATR"] = ta.atr(df["high"], df["low"], df["close"], 14)
+        df["RSI"] = ta.rsi(df["close"], 14)
 
-    # 4. M30 (Setup): Digunakan untuk structure swing (raw price)
+    # 4. M30 (Setup): Structure swing, butuh ATR untuk dynamic zone
     elif tf == "30m":
-        pass 
+        df["ATR"] = ta.atr(df["high"], df["low"], df["close"], 14)
 
-    # 5. M15 (Execution): EMA20 untuk momentum (opsional), ATR untuk Risk
+    # 5. M15 (Execution): ATR untuk Risk Management
     elif tf == "15m":
-        df["EMA20"] = ta.ema(df["close"], 20)
         df["ATR"] = ta.atr(df["high"], df["low"], df["close"], 14)
 
     df.dropna(inplace=True)
     return df
 
-# [NEW FUNCTION] Check H4 Exhaustion (RSI Divergence)
+# 3. STRUCTURE & DIVERGENCE (Required by data.py)
 def detect_rsi_divergence(df, direction):
-    """
-    Mendeteksi Divergence (Higher High Price, Lower High RSI dsb.)
-    Hanya cek dua swing point terakhir yang unik.
-    """
     if df is None or len(df) < 50 or "RSI" not in df.columns:
         return False, "Insufficient Data/RSI"
 
-    # Gunakan rolling window kecil untuk menemukan titik swing lokal
+    # Rolling window untuk swing point
     highs = df['high'].rolling(window=10, center=True).max()
     lows = df['low'].rolling(window=10, center=True).min()
     
-    # Filter data point di mana High/Low sama dengan rolling max/min (titik swing)
     high_points = df[df['high'] == highs]['high'].dropna().drop_duplicates(keep='last')
     low_points = df[df['low'] == lows]['low'].dropna().drop_duplicates(keep='last')
     
     if len(high_points) < 2 or len(low_points) < 2:
-        return False, "Need more than 2 swings"
+        return False, "Need more swings"
 
-    if direction == "LONG":
-        # Bearish Divergence (Higher High Price, Lower High RSI)
-        current_high = high_points.iloc[-1]
-        previous_high = high_points.iloc[-2]
+    if direction == "LONG": 
+        c_high, p_high = high_points.iloc[-1], high_points.iloc[-2]
+        c_rsi = df.loc[high_points.index[-1], 'RSI']
+        p_rsi = df.loc[high_points.index[-2], 'RSI']
         
-        # Cari RSI pada index harga swing tersebut
-        current_rsi = df[df['high'] == current_high]['RSI'].iloc[-1]
-        previous_rsi = df[df['high'] == previous_high]['RSI'].iloc[-1]
-        
-        # Cek Divergence
-        is_higher_high_price = current_high > previous_high
-        is_lower_high_rsi = current_rsi < previous_rsi
-
-        if is_higher_high_price and is_lower_high_rsi:
-            return True, "H4 Bearish Divergence (Price HH, RSI LH)"
+        if c_high > p_high and c_rsi < p_rsi:
+            return True, "Bearish Divergence (Price HH, RSI LH)"
             
-    elif direction == "SHORT":
-        # Bullish Divergence (Lower Low Price, Higher Low RSI)
-        current_low = low_points.iloc[-1]
-        previous_low = low_points.iloc[-2]
+    elif direction == "SHORT": 
+        c_low, p_low = low_points.iloc[-1], low_points.iloc[-2]
+        c_rsi = df.loc[low_points.index[-1], 'RSI']
+        p_rsi = df.loc[low_points.index[-2], 'RSI']
 
-        # Cari RSI pada index harga swing tersebut
-        current_rsi = df[df['low'] == current_low]['RSI'].iloc[-1]
-        previous_rsi = df[df['low'] == previous_low]['RSI'].iloc[-1]
+        if c_low < p_low and c_rsi > p_rsi:
+            return True, "Bullish Divergence (Price LL, RSI HL)"
 
-        # Cek Divergence
-        is_lower_low_price = current_low < previous_low
-        is_higher_low_rsi = current_rsi > previous_rsi
+    return False, "None"
 
-        if is_lower_low_price and is_higher_low_rsi:
-            return True, "H4 Bullish Divergence (Price LL, RSI HL)"
-
-    return False, "No Divergence Detected"
-
-
-# ================================================================
-# MARKET STRUCTURE (HH/HL Logic) - Adaptive Lookback Window
-# ================================================================
-def compute_trend_structure(df, adx_value): # <-- ADD ADX INPUT
-    """
-    Mendeteksi Struktur HH/HL (Bullish) atau LH/LL (Bearish) dengan Adaptive Lookback Window.
-    """
-    
-    # 1. Tentukan Window Adaptif
+def compute_trend_structure(df, adx_value):
     adx_val = float(adx_value) if adx_value else 0
-    
-    if adx_val >= config.ADX_AGGRESSIVE_THRESHOLD:
-        window_size = 10 # Mode Agresif (ADX > 30)
-    elif adx_val >= config.ADX_NORMAL_THRESHOLD:
-        window_size = 20 # Mode Standar (ADX 20-30)
-    else:
-        # Jika ADX < 20, Filter akan memblokir di data.py, kita kembalikan default.
-        return "NEUTRAL", 20 
+    window_size = 10 if adx_val >= config.ADX_AGGRESSIVE_THRESHOLD else 20 # Adaptive
 
     if df is None or len(df) < window_size * 2:
         return "NEUTRAL", window_size
 
-    # Cari Swing Highs & Lows (Window 10 kiri-kanan untuk menentukan titik swing)
     highs = df['high'].rolling(window=10, center=True).max()
     lows = df['low'].rolling(window=10, center=True).min()
     
-    # Filter data hanya pada N candle terakhir (sesuai Adaptive Window)
     df_recent = df.tail(window_size)
-    
-    # Ambil titik swing yang berada di dalam df_recent
-    valid_highs_set = set()
-    valid_lows_set = set()
-    
-    # Cari indeks di df_recent yang sesuai dengan swing point
-    for index in df_recent.index:
-        # Check jika candle high/low sama dengan rolling max/min-nya (swing point)
-        if df_recent.loc[index, 'high'] == highs.loc[index]:
-            valid_highs_set.add(df_recent.loc[index, 'high'])
-        if df_recent.loc[index, 'low'] == lows.loc[index]:
-            valid_lows_set.add(df_recent.loc[index, 'low'])
-            
-    valid_highs = sorted(list(valid_highs_set), reverse=True) # Sort dari terbesar (Current High)
-    valid_lows = sorted(list(valid_lows_set))                 # Sort dari terkecil (Current Low)
+    valid_highs = sorted([h for i, h in df_recent['high'].items() if h == highs.get(i)], reverse=True)
+    valid_lows = sorted([l for i, l in df_recent['low'].items() if l == lows.get(i)])
 
-    # Fallback jika tidak ketemu 2 swing point yang valid dalam periode adaptif
-    if len(valid_highs) < 2 or len(valid_lows) < 2:
-        # Ambil 2 nilai max/min saja dari window terakhir
-        valid_highs = df_recent['high'].nlargest(2).unique()
-        valid_lows = df_recent['low'].nsmallest(2).unique()
-        
     if len(valid_highs) < 2 or len(valid_lows) < 2:
         return "NEUTRAL", window_size
     
-    # Ambil 2 swing terakhir (High: 2 tertinggi, Low: 2 terendah)
-    curr_high, prev_high = valid_highs[0], valid_highs[1]
-    curr_low, prev_low = valid_lows[0], valid_lows[1]
+    # Check Structure
+    curr_h, prev_h = valid_highs[0], valid_highs[1]
+    curr_l, prev_l = valid_lows[0], valid_lows[1]
     
-    # Bullish: Higher High & Higher Low
-    if curr_high > prev_high and curr_low > prev_low:
-        return "LONG", window_size
-        
-    # Bearish: Lower High & Lower Low
-    elif curr_high < prev_high and curr_low < prev_low:
-        return "SHORT", window_size
+    if curr_h > prev_h and curr_l > prev_l: return "LONG", window_size
+    if curr_h < prev_h and curr_l < prev_l: return "SHORT", window_size
         
     return "NEUTRAL", window_size
+
+# 4. OBJECTIVE SCORING LOGIC (New Requirements)
+def calculate_snr_score(df, level, atr_m30):
+    score = 0
+    zone_width = atr_m30 * config.ATR_ZONE_WIDTH
+    upper = level + zone_width
+    lower = level - zone_width
+    
+    recent = df.tail(50)
+    for i in range(len(recent)):
+        row = recent.iloc[i]
+        c_close, c_open = row['close'], row['open']
+        c_high, c_low = row['high'], row['low']
+        
+        # Cek interaksi zona
+        if (lower <= c_high <= upper) or (lower <= c_low <= upper):
+            # Body Breakout
+            if (c_close > upper and c_open < lower) or (c_close < lower and c_open > upper):
+                score += config.SCORE_BODY_BREAKOUT
+            # Bounce Body
+            elif (c_high >= lower and c_close > c_open) or (c_low <= upper and c_close < c_open):
+                score += config.SCORE_BOUNCE_BODY
+            # Wick Rejection
+            elif (c_high - max(c_open, c_close)) > (c_high - c_low) * 0.6:
+                score += config.SCORE_WICK_REJECTION
+
+    score += config.SCORE_FRESHNESS
+    return score
+
+def detect_weakening(df):
+    if len(df) < 15: return False
+    last = df.iloc[-1]
+    prev = df.iloc[-2]
+    
+    avg_body = compute_avg_body(df, config.WEAKENING_LOOKBACK).iloc[-1]
+    curr_body = abs(last['close'] - last['open'])
+    prev_body = abs(prev['close'] - prev['open'])
+    
+    return (curr_body / (avg_body + 1e-9) < config.WEAKENING_RATIO) and (curr_body < prev_body)
+
+def detect_fvg_zone(df, direction):
+    if len(df) < 5: return None
+    
+    for i in range(len(df)-3, 0, -1):
+        c0 = df.iloc[i]
+        c2 = df.iloc[i+2]
+        atr = c0.get('ATR', 0)
+        
+        if direction == "LONG":
+            gap = c2['low'] - c0['high'] 
+            if gap > (atr * config.FVG_MIN_SIZE_ATR):
+                return {"top": c2['low'], "bottom": c0['high'], "type": "BULLISH_FVG"}
+        elif direction == "SHORT":
+            gap = c0['low'] - c2['high'] 
+            if gap > (atr * config.FVG_MIN_SIZE_ATR):
+                return {"top": c0['low'], "bottom": c2['high'], "type": "BEARISH_FVG"}
+                
+    return None

@@ -2,7 +2,6 @@ import requests
 import os
 from dotenv import load_dotenv
 
-# 1. Muat Environment Variables
 load_dotenv()
 API_KEY = os.getenv("CRYPTOPANIC_API_KEY")
 
@@ -10,18 +9,12 @@ API_KEY = os.getenv("CRYPTOPANIC_API_KEY")
 BASE_URL = "https://cryptopanic.com/api/v1/posts/"
 
 def get_crypto_news(symbol, limit=5):
-    """
-    Mengambil berita dengan Error Handling yang kuat.
-    Jika gagal, return pesan netral agar AI tetap bisa jalan.
-    """
     if not API_KEY:
         return "Info: API Key Berita belum diset. Mengabaikan sentimen berita."
 
-    # Bersihkan simbol (BTC/USDT -> BTC)
     coin_symbol = symbol.split('/')[0].upper()
     
     try:
-        # TAMBAHAN PENTING: User-Agent agar tidak diblokir server
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
         }
@@ -30,11 +23,9 @@ def get_crypto_news(symbol, limit=5):
         
         response = requests.get(url, headers=headers, timeout=15)
         
-        # Cek Status Code
         if response.status_code != 200:
             return f"Info: Gagal mengambil berita (Status {response.status_code}). Lanjut analisa teknikal."
             
-        # Cek apakah response kosong sebelum parse JSON
         if not response.text.strip():
             return "Info: Server berita tidak merespon. Lanjut analisa teknikal."
 
@@ -47,9 +38,9 @@ def get_crypto_news(symbol, limit=5):
                 votes = item.get('votes', {})
                 positive = votes.get('positive', 0)
                 negative = votes.get('negative', 0)
-                is_hot = "🔥" if (positive + negative) > 20 else ""
+                is_hot = "" if (positive + negative) > 20 else ""
                 
-                news_list.append(f"- {is_hot} {title} (👍{positive}/👎{negative})")
+                news_list.append(f"- {is_hot} {title} ({positive}/{negative})")
         
         if not news_list:
             return "Tidak ada berita signifikan dalam 24 jam terakhir. Sentimen Netral."
@@ -57,14 +48,9 @@ def get_crypto_news(symbol, limit=5):
         return "\n".join(news_list)
 
     except Exception as e:
-        # JANGAN CRASH. Return pesan info saja.
         return f"Info: Koneksi berita skip ({str(e)}). Lanjut ke teknikal."
 
 def analyze_sentiment_score(news_text):
-    """
-    Scoring sentimen. Jika berita error/kosong, anggap NEUTRAL.
-    """
-    # Jika input adalah pesan error/info, return NEUTRAL
     if "Info:" in news_text or "Gagal" in news_text:
         return "NEUTRAL (No Data)"
 

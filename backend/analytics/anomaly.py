@@ -1,18 +1,3 @@
-"""
-Robust anomaly detection for crypto/forex/indices.
-Outputs:
-{
-  "anomaly": bool,
-  "severity": float 0..1,
-  "reasons": [...],
-  "metrics": {
-      vol_z, ret_z, wick_top_ratio, wick_bottom_ratio,
-      vol_score, ret_score, wick_score,
-      severity_raw, threshold_alert, threshold_block
-  }
-}
-"""
-
 import numpy as np
 import pandas as pd
 from typing import Dict, Any

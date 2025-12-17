@@ -1,40 +1,26 @@
-"""
-AI Explainability Layer
-- Menjelaskan keputusan AI dalam bahasa manusia
-- Kombinasi: rule-based + LLM narrative
-"""
-
 import os
 import json
 from typing import Dict, Any
 import requests
-from dotenv import load_dotenv  # <-- TAMBAHAN PENTING
+from dotenv import load_dotenv  
 
-# Muat environment variables (.env)
 load_dotenv()
 
 class ExplainabilityEngine:
 
     def __init__(self):
-        # Groq (GPT-OSS-120B) atau OpenAI Compatible
         self.openai_api = os.getenv("OPENAI_BASE_URL")
         self.openai_key = os.getenv("OPENAI_API_KEY")
         self.openai_model = os.getenv("OPENAI_MODEL_NAME", "openai/gpt-oss-120b")
-
-        # Gemini Flash 2.0
         self.gemini_key = os.getenv("GEMINI_API_KEY")
 
-    # ==========================
     # LLM CALLERS
-    # ==========================
     def _call_gpt_oss(self, prompt: str) -> str:
-        # Cek konfigurasi sebelum request
         if not self.openai_api or not self.openai_key:
-            print("⚠️ Explainability: OPENAI_BASE_URL atau OPENAI_API_KEY belum diset.")
+            print("Explainability: OPENAI_BASE_URL atau OPENAI_API_KEY belum diset.")
             return None
 
         try:
-            # Pastikan URL valid (hapus trailing slash jika ada)
             base_url = self.openai_api.rstrip('/')
             url = f"{base_url}/chat/completions"
             
@@ -53,16 +39,16 @@ class ExplainabilityEngine:
             if res.status_code == 200:
                 return res.json()["choices"][0]["message"]["content"]
             else:
-                print(f"⚠️ GPT-OSS Error {res.status_code}: {res.text}")
+                print(f"GPT-OSS Error {res.status_code}: {res.text}")
                 return None
 
         except Exception as e:
-            print(f"⚠️ GPT-OSS Exception: {str(e)}")
+            print(f"GPT-OSS Exception: {str(e)}")
             return None
 
     def _call_gemini(self, prompt: str) -> str:
         if not self.gemini_key:
-            print("⚠️ Explainability: GEMINI_API_KEY belum diset.")
+            print("Explainability: GEMINI_API_KEY belum diset.")
             return None
 
         try:
@@ -75,28 +61,21 @@ class ExplainabilityEngine:
                 if "candidates" in data and len(data["candidates"]) > 0:
                     return data["candidates"][0]["content"]["parts"][0]["text"]
             
-            print(f"⚠️ Gemini Error {res.status_code}: {res.text}")
+            print(f"Gemini Error {res.status_code}: {res.text}")
             return None
             
         except Exception as e:
-            print(f"⚠️ Gemini Exception: {str(e)}")
+            print(f"Gemini Exception: {str(e)}")
             return None
 
-    # ==========================
     # MAIN EXPLAINABILITY
-    # ==========================
     def explain(self, context: Dict[str, Any]) -> str:
-        """
-        Menjelaskan keputusan berdasarkan Executive Summary (Macro, Micro, Risk, Recommendation).
-        """
-        
-        # Serialisasi context agar aman dibaca LLM
         try:
             context_str = json.dumps(context, indent=2, default=str)
         except:
             context_str = str(context)
 
-        # --- PROMPT BARU (EXECUTIVE SUMMARY STYLE) ---
+        # --- PROMPT SUMMARY ---
         prompt = f"""
         Anda adalah Senior Crypto Analyst di AltaQuant. 
         Tugas Anda adalah memberikan "Executive Summary" berdasarkan data independen berikut.
@@ -114,20 +93,18 @@ class ExplainabilityEngine:
         Gunakan bahasa Indonesia yang profesional, padat, dan langsung pada inti.
         """
 
-        # 1. Coba Primary LLM (GPT-OSS / Groq)
+        # 1. Primary LLM (GPT-OSS / Groq)
         out = self._call_gpt_oss(prompt)
         if out: return out
 
-        # 2. Coba Secondary LLM (Gemini)
+        # 2. Secondary LLM (Gemini)
         out = self._call_gemini(prompt)
         if out: return out
 
         # 3. Final fallback
         return self._fallback_explanation(context)
 
-    # ==========================
     # FALLBACK (RULE BASED)
-    # ==========================
     def _fallback_explanation(self, ctx: Dict[str, Any]) -> str:
         decision = ctx.get("ai_decision", {}) 
         
@@ -136,7 +113,7 @@ class ExplainabilityEngine:
         direction = decision.get("direction", "None")
         
         return f"""
-        ⚠️ **AI Offline Mode**
+        **AI Offline Mode**
         
         Sistem memutuskan: **{status}** ({direction})
         Alasan Utama: {reason}

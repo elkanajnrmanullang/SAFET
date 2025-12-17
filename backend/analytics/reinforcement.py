@@ -1,10 +1,3 @@
-"""
-Reinforcement Learning Loop
-- sistem belajar dari hasil trade sebelumnya
-- update scoring probabilitas
-- weight adjustments -> semi RL (model-free)
-"""
-
 import json
 import numpy as np
 from typing import Dict, Any
@@ -13,7 +6,6 @@ from typing import Dict, Any
 class ReinforcementLearner:
 
     def __init__(self):
-        # Default global weights
         self.weights = {
             "pattern": 0.35,
             "anomaly": 0.15,
@@ -21,18 +13,12 @@ class ReinforcementLearner:
             "risk": 0.05
         }
 
-    # ==========================
     # UPDATE WEIGHT BASED ON OUTCOME
-    # ==========================
     def update(self, signal_context: Dict[str, Any], result: str):
-        """
-        result: "win" | "loss"
-        """
 
         adj = 0.02 if result == "win" else -0.02
 
         for k in self.weights:
-            # Jika komponen penting → adjust lebih besar
             if signal_context.get(k, None):
                 self.weights[k] += adj
 
@@ -43,19 +29,8 @@ class ReinforcementLearner:
 
         return self.weights
 
-    # ==========================
     # SCORE SIGNAL
-    # ==========================
     def score_signal(self, ctx: Dict[str, Any]) -> float:
-        """
-        ctx example:
-        {
-          "pattern_conf": 0.72,
-          "anomaly_severity": 0.1,
-          "forecast_prob": 0.65,
-          "risk_score": 0.8
-        }
-        """
         p = ctx.get("pattern_conf", 0)
         a = 1 - ctx.get("anomaly_severity", 0)
         f = ctx.get("forecast_prob", 0)

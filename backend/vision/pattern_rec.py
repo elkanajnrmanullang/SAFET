@@ -5,28 +5,18 @@ import base64
 import pandas as pd
 import shutil
 from datetime import datetime
-from typing import Dict, Any, AnyStr, Optional, Tuple # <-- FIX: Menambahkan 'Any' dan mengonsolidasi imports
+from typing import Dict, Any, AnyStr, Optional, Tuple 
 
 TEMP_VISION_DIR = "data/temp_vision"
 os.makedirs(TEMP_VISION_DIR, exist_ok=True)
 
 class PatternRecognition:
     def __init__(self):
-        # Menggunakan Gemini API Key dari environment
         self.gemini_key = os.getenv("GEMINI_API_KEY")
-        # Endpoint Gemini Flash (Cepat & Vision Capable)
         self.api_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={self.gemini_key}"
 
-    # =========================================================
-    # 1. VISION AI (PENGGANTI ROBOFLOW)
-    # =========================================================
+    # 1. VISION AI 
     def analyze_chart_image(self, image_bytes: bytes) -> Dict[str, Any]:
-        """
-        Menganalisis gambar chart yang diupload user menggunakan Vision AI.
-        Tujuannya untuk mendapatkan konteks pola (misal: Bull Flag, Triangle)
-        sebagai validasi tambahan untuk Trend H4.
-        """
-        # Cek API Key
         if not self.gemini_key:
             return {
                 "pattern": None, 
@@ -36,10 +26,7 @@ class PatternRecognition:
             }
 
         try:
-            # 1. Encode gambar ke Base64 agar bisa dikirim via JSON Payload
             b64_image = base64.b64encode(image_bytes).decode('utf-8')
-
-            # 2. Siapkan Prompt Spesifik untuk Technical Analyst
             prompt_text = """
             Kamu adalah Expert Technical Analyst di AltaQuant. 
             Tugasmu adalah menganalisis gambar chart crypto/forex yang diberikan user.
@@ -61,33 +48,28 @@ class PatternRecognition:
             }
             """
 
-            # 3. Susun Payload Request
             payload = {
                 "contents": [{
                     "parts": [
                         {"text": prompt_text},
                         {"inline_data": {
-                            "mime_type": "image/jpeg", # Default assumption, API Gemini cukup toleran
+                            "mime_type": "image/jpeg",
                             "data": b64_image
                         }}
                     ]
                 }]
             }
 
-            # 4. Kirim Request ke Google Gemini
             response = requests.post(self.api_url, json=payload, timeout=15)
             
             if response.status_code == 200:
                 res_json = response.json()
                 
-                # Ekstrak dan bersihkan teks jawaban
                 try:
                     raw_text = res_json["candidates"][0]["content"]["parts"][0]["text"]
-                    # Bersihkan format markdown ```json ... ``` jika AI menambahkannya
                     clean_text = raw_text.replace("```json", "").replace("```", "").strip()
                     data = json.loads(clean_text)
                     
-                    # Mapping Sentiment AI ke standar internal (LONG/SHORT)
                     ai_sentiment = data.get("sentiment", "NEUTRAL").upper()
                     internal_sentiment = "NEUTRAL"
                     
@@ -124,36 +106,30 @@ class PatternRecognition:
                 "reason": f"Connection Error: {str(e)}"
             }
 
-    # =========================================================
     # 2. LOCAL RULE-BASED CANDLE DETECTION (FALLBACK)
-    # =========================================================
     def detect_basic_candles(self, df: pd.DataFrame) -> Dict:
-        """
-        Deteksi pola candle dasar secara matematik (tanpa AI).
-        Ini berguna sebagai validasi instan di M15/M30 jika diperlukan.
-        """
         if df is None or len(df) < 3:
             return {"pattern": None, "score": 0}
 
         last = df.iloc[-1]
         body = abs(last["close"] - last["open"])
         
-        # Menghitung sumbu (wick)
+        # Menghitung sumbu 
         wick_upper = last["high"] - max(last["close"], last["open"])
         wick_lower = min(last["close"], last["open"]) - last["low"]
         total_range = last["high"] - last["low"]
 
         if total_range == 0: return {"pattern": None, "score": 0}
 
-        # Hammer / Pinbar Bullish (Ekor bawah panjang)
+        # Hammer / Pinbar Bullish
         if wick_lower > (body * 2) and wick_upper < body:
             return {"pattern": "Hammer (Pinbar)", "score": 0.65}
 
-        # Shooting Star / Pinbar Bearish (Ekor atas panjang)
+        # Shooting Star / Pinbar Bearish 
         if wick_upper > (body * 2) and wick_lower < body:
             return {"pattern": "Shooting Star", "score": 0.65}
 
-        # Marubozu (Body tebal, minim ekor) - Sesuai Skenario C M15
+        # Marubozu 
         if body > (total_range * 0.7):
             if last["close"] > last["open"]:
                 return {"pattern": "Bullish Marubozu", "score": 0.75}
@@ -162,33 +138,22 @@ class PatternRecognition:
 
         return {"pattern": None, "score": 0}
 
-    # =========================================================
     # MAIN WRAPPER (KOMPATIBILITAS)
-    # =========================================================
     def run(self, df: pd.DataFrame = None, image_bytes: bytes = None) -> Dict:
-        """
-        Fungsi utama yang bisa dipanggil pipeline.
-        Bisa memproses Dataframe (Candle Math) atau Gambar (Vision AI).
-        """
         result = {
             "vision_pattern": None,
             "basic_candle": None
         }
 
-        # 1. Jika ada gambar, jalankan Vision AI
         if image_bytes:
             result["vision_pattern"] = self.analyze_chart_image(image_bytes)
-
-        # 2. Jika ada DataFrame, jalankan Math Logic
         if df is not None and not df.empty:
             result["basic_candle"] = self.detect_basic_candles(df)
 
         return result
-
-# Instance global agar mudah diimport
+    
 vision_engine = PatternRecognition()
 
-# Bagian helper di bawah ini juga menggunakan 'Optional' dan 'Tuple' yang sekarang sudah diimpor.
 def _safe_save_image(src_path: str) -> Optional[str]:
     try:
         if not src_path:
